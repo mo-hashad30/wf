@@ -1,0 +1,318 @@
+#NoEnv
+#Persistent
+#NoTrayIcon
+#SingleInstance Force
+SetBatchLines, -1
+
+; CHANGE THIS TO "Waheed" ON THE SECOND LAPTOP
+global LaptopID := "Hashad" 
+
+global Url := "http://136.119.161.133:5000"
+global req := ComObjCreate("MSXML2.XMLHTTP")
+global IsIdling := 0
+global IdleMax := 0
+global IdleTimerCount := 0
+
+Poll()
+
+Poll() {
+    try {
+        req.open("GET", Url "/poll?laptop=" LaptopID "&t=" A_TickCount, true)
+        req.send()
+        SetTimer, CheckState, 100
+    } catch {
+        SetTimer, Poll, -5000
+    }
+}
+
+CheckState() {
+    try {
+        if (req.readyState == 4) {
+            SetTimer, CheckState, Off
+            
+            if (req.status == 200) {
+                text := req.responseText
+                if (text != "") {
+                    delim := InStr(text, "|")
+                    cmd_id := SubStr(text, 1, delim - 1)
+                    cmd := SubStr(text, delim + 1)
+                    
+                    ; --- Idle Logic ---
+                    if (InStr(cmd, "Idle|") == 1) {
+                        mins := SubStr(cmd, 6)
+                        IdleMax := mins * 60
+                        IdleTimerCount := 0
+                        IsIdling := 1
+                        SetTimer, DoIdle, 1000
+                        SendResult(cmd_id, "Started Anti-Idle Mode for " mins " minutes")
+                        SetTimer, Poll, -10
+                        return
+                    }
+
+                    ; --- Check Status ---
+                    if (cmd == "Check status") {
+                        if (!WinExist("ahk_exe Workfolio.exe")) {
+                            res := "STATUS|0|0|0|0|" IsIdling
+                        } else {
+                            conn := WorkfolioBtn("Click here", 0, 50005) ? 0 : 1
+                            c_in := (WorkfolioBtn("Clock Out") || WorkfolioBtn("Take a Break") || WorkfolioBtn("Resume Work")) ? 1 : 0
+                            brk := WorkfolioBtn("Resume Work") ? 1 : 0
+                            res := "STATUS|1|" conn "|" c_in "|" brk "|" IsIdling
+                        }
+                        SendResult(cmd_id, res)
+                        SetTimer, Poll, -10
+                        return
+                    }
+
+                    if (!WinExist("ahk_exe Workfolio.exe")) {
+                        SendNotify(cmd_id, "Workfolio not opened, launching...")
+                        EnvGet, LocalAppData, LOCALAPPDATA
+                        wfPath := LocalAppData . "\Programs\@workfoliodesktop\Workfolio.exe"
+                        if (!FileExist(wfPath)) {
+                            wfPath := A_ProgramFiles . "\@workfoliodesktop\Workfolio.exe"
+                            if (!FileExist(wfPath)) {
+                                SendResult(cmd_id, "Failed: Workfolio.exe not found")
+                                SetTimer, Poll, -10
+                                return
+                            }
+                        }
+                        Run, "%wfPath%"
+                        WinWait, ahk_exe Workfolio.exe,, 15
+                        if (ErrorLevel) {
+                            SendResult(cmd_id, "Failed: Workfolio window didn't appear")
+                            SetTimer, Poll, -10
+                            return
+                        }
+                        loaded := 0
+                        Loop, 15 {
+                            Sleep, 1000
+                            if (WorkfolioBtn("Clock In") || WorkfolioBtn("Clock Out") || WorkfolioBtn("Resume Work") || WorkfolioBtn("Take a Break") || WorkfolioBtn("Click here", 0, 50005)) {
+                                loaded := 1
+                                break
+                            }
+                        }
+                        if (!loaded) {
+                            SendResult(cmd_id, "Failed: Buttons didn't load")
+                            SetTimer, Poll, -10
+                            return
+                        }
+                    }
+                    
+                    cmdLoop:
+                    Loop, 2 {
+                        res := ""
+                        if (cmd == "Clock In") {
+                            if (WorkfolioBtn("Clock Out"))
+                                res := "Already clocked in"
+                            else if (WorkfolioBtn("Clock In", 1)) {
+                                Sleep, 1000
+                                res := WorkfolioBtn("Clock Out") ? "Success" : "Failed: Clock Out button didn't appear"
+                            }
+                        } else if (cmd == "Clock Out") {
+                            if (WorkfolioBtn("Clock In"))
+                                res := "Already clocked out"
+                            else if (WorkfolioBtn("Clock Out", 1)) {
+                                Sleep, 1000
+                                res := WorkfolioBtn("Clock In") ? "Success" : "Failed: Clock In button didn't appear"
+                            }
+                        } else if (cmd == "Break") {
+                            if (WorkfolioBtn("Clock In"))
+                                res := "You didn't clock in yet!"
+                            else if (WorkfolioBtn("Resume Work"))
+                                res := "You're already in a break"
+                            else if (WorkfolioBtn("Take a Break", 1)) {
+                                Sleep, 1000
+                                res := WorkfolioBtn("Resume Work") ? "Success" : "Failed: Resume Work button didn't appear"
+                            }
+                        } else if (cmd == "Resume") {
+                            if (WorkfolioBtn("Clock In"))
+                                res := "You didn't clock in yet!"
+                            else if (WorkfolioBtn("Take a Break"))
+                                res := "You're not in a break"
+                            else if (WorkfolioBtn("Resume Work", 1)) {
+                                Sleep, 1000
+                                res := WorkfolioBtn("Take a Break") ? "Success" : "Failed: Take a Break button didn't appear"
+                            }
+                        } else if (cmd == "Refresh") {
+                            if (WorkfolioBtn("Clock In"))
+                                res := "You didn't clock in yet!"
+                            else if (WorkfolioBtn("Take a Break"))
+                                res := "You're not in a break"
+                            else if (WorkfolioBtn("Resume Work", 1)) {
+                                Sleep, 10000
+                                if (WorkfolioBtn("Take a Break", 1)) {
+                                    Sleep, 1000
+                                    res := WorkfolioBtn("Resume Work") ? "Success" : "Failed on break step"
+                                } else
+                                    res := "Failed to find Take a Break"
+                            }
+                        }
+                        
+                        if (res == "") {
+                            if (A_Index == 1 && WorkfolioBtn("Click here", 0, 50005)) {
+                                SendNotify(cmd_id, "Workfolio disconnected, reconnecting..")
+                                Loop, 6 {
+                                    WorkfolioBtn("Click here", 1, 50005)
+                                    Sleep, 5000
+                                    if (!WorkfolioBtn("Click here", 0, 50005))
+                                        continue cmdLoop
+                                }
+                                res := "Failed: Could not reconnect"
+                            } else {
+                                res := "Failed: Target buttons not found"
+                            }
+                        }
+                        break
+                    }
+                    
+                    if (res != "")
+                        SendResult(cmd_id, res)
+                }
+                SetTimer, Poll, -10
+            } else {
+                throw Exception("HTTP Error")
+            }
+        }
+    } catch {
+        SetTimer, CheckState, Off
+        SetTimer, Poll, -5000
+    }
+}
+
+DoIdle:
+    IdleTimerCount++
+    if (IdleTimerCount > IdleMax) {
+        IsIdling := 0
+        SetTimer, DoIdle, Off
+        return
+    }
+    ; Every 60 seconds do a tiny human-like interaction
+    if (Mod(IdleTimerCount, 60) == 0) {
+        MouseMove, 1, 1, 0, R
+        MouseMove, -1, -1, 0, R
+        Send, {F15}
+    }
+return
+
+UriEncode(str) {
+    str := StrReplace(str, "%", "%25")
+    str := StrReplace(str, "`n", "%0A")
+    str := StrReplace(str, "`r", "%0D")
+    str := StrReplace(str, "&", "%26")
+    str := StrReplace(str, "+", "%2B")
+    str := StrReplace(str, " ", "+")
+    str := StrReplace(str, """", "%22")
+    str := StrReplace(str, "'", "%27")
+    return str
+}
+
+SendNotify(id, msg) {
+    try {
+        r := ComObjCreate("MSXML2.XMLHTTP")
+        r.open("POST", Url "/notify", false)
+        r.setRequestHeader("Content-Type", "application/x-www-form-urlencoded")
+        r.send("id=" id "&msg=" UriEncode(msg))
+    }
+}
+
+SendResult(id, msg) {
+    try {
+        r := ComObjCreate("MSXML2.XMLHTTP")
+        r.open("POST", Url "/result", false)
+        r.setRequestHeader("Content-Type", "application/x-www-form-urlencoded")
+        r.send("id=" id "&msg=" UriEncode(msg))
+    }
+}
+
+WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
+    found := 0
+    DllCall("ole32\CoInitialize", "Ptr", 0)
+    WinGet, activeHwnd, ID, ahk_exe Workfolio.exe
+    if (!activeHwnd) {
+        DllCall("ole32\CoUninitialize")
+        return 0
+    }
+    VarSetCapacity(CLSID, 16, 0), DllCall("ole32\CLSIDFromString", "WStr", "{ff48dba4-60ef-4201-aa87-54103eef594e}", "Ptr", &CLSID)
+    VarSetCapacity(IID, 16, 0), DllCall("ole32\IIDFromString", "WStr", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}", "Ptr", &IID)
+    IUIAutomation := 0
+    DllCall("ole32\CoCreateInstance", "Ptr", &CLSID, "Ptr", 0, "UInt", 1, "Ptr", &IID, "Ptr*", IUIAutomation)
+    if (!IUIAutomation) {
+        DllCall("ole32\CoUninitialize")
+        return 0
+    }
+    VarSetCapacity(varName, 8 + 2*A_PtrSize, 0)
+    NumPut(8, varName, 0, "UShort")
+    bstrName := DllCall("oleaut32\SysAllocString", "WStr", btnName, "Ptr")
+    NumPut(bstrName, varName, 8, "Ptr")
+    VarSetCapacity(varType, 8 + 2*A_PtrSize, 0)
+    NumPut(3, varType, 0, "UShort")
+    NumPut(ctrlType, varType, 8, "Int")
+    if (A_PtrSize == 4) {
+        DllCall(NumGet(NumGet(IUIAutomation+0)+23*A_PtrSize), "Ptr", IUIAutomation, "Int", 30005, "Int64", NumGet(varName, 0, "Int64"), "Int64", NumGet(varName, 8, "Int64"), "Ptr*", nameCond)
+        DllCall(NumGet(NumGet(IUIAutomation+0)+23*A_PtrSize), "Ptr", IUIAutomation, "Int", 30003, "Int64", NumGet(varType, 0, "Int64"), "Int64", NumGet(varType, 8, "Int64"), "Ptr*", typeCond)
+    } else {
+        DllCall(NumGet(NumGet(IUIAutomation+0)+23*A_PtrSize), "Ptr", IUIAutomation, "Int", 30005, "Ptr", &varName, "Ptr*", nameCond)
+        DllCall(NumGet(NumGet(IUIAutomation+0)+23*A_PtrSize), "Ptr", IUIAutomation, "Int", 30003, "Ptr", &varType, "Ptr*", typeCond)
+    }
+    DllCall(NumGet(NumGet(IUIAutomation+0)+25*A_PtrSize), "Ptr", IUIAutomation, "Ptr", nameCond, "Ptr", typeCond, "Ptr*", andCond)
+    WinGet, childHwnds, ControlListHwnd, ahk_id %activeHwnd%
+    allHwnds := activeHwnd . "`n" . childHwnds
+    Loop, Parse, allHwnds, `n
+    {
+        if (A_LoopField = "")
+            continue
+        DllCall(NumGet(NumGet(IUIAutomation+0)+6*A_PtrSize), "Ptr", IUIAutomation, "Ptr", A_LoopField, "Ptr*", el)
+        if (!el)
+            continue
+        btn := 0
+        DllCall(NumGet(NumGet(el+0)+5*A_PtrSize), "Ptr", el, "Int", 4, "Ptr", andCond, "Ptr*", btn)
+        ObjRelease(el)
+        if (btn) {
+            found := 1
+            if (doClick) {
+                invokePattern := 0
+                DllCall(NumGet(NumGet(btn+0)+16*A_PtrSize), "Ptr", btn, "Int", 10000, "Ptr*", invokePattern)
+                if (invokePattern) {
+                    DllCall(NumGet(NumGet(invokePattern+0)+3*A_PtrSize), "Ptr", invokePattern)
+                    ObjRelease(invokePattern)
+                }
+            }
+            ObjRelease(btn)
+            break
+        }
+    }
+    if (andCond)
+        ObjRelease(andCond)
+    if (typeCond)
+        ObjRelease(typeCond)
+    if (nameCond)
+        ObjRelease(nameCond)
+    DllCall("oleaut32\SysFreeString", "Ptr", bstrName)
+    ObjRelease(IUIAutomation)
+    DllCall("ole32\CoUninitialize")
+    return found
+}
+
+ObjRelease(obj) {
+    if (!obj)
+        return
+    if IsObject(obj) {
+        try {
+            if ObjHasKey(obj, "__Value")
+                obj := obj.__Value
+            else
+                return
+        } catch
+            return
+    }
+    try {
+        vtbl := NumGet(obj+0, "Ptr")
+        release := NumGet(vtbl + 2*A_PtrSize, "Ptr")
+        DllCall(release, "Ptr", obj)
+    } catch
+    return
+}
+
+^!+F12::
+    ExitApp
+return
