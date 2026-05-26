@@ -4,10 +4,10 @@
 #SingleInstance Force
 SetBatchLines, -1
 
-; CHANGE THIS TO "Waheed" ON THE SECOND LAPTOP
 global LaptopID := "Hashad" 
 
-global Url := "http://136.119.161.133:5000"
+;global Url := "http://136.119.161.133:5000"
+global Url := "http://127.0.0.1:5000"
 global req := ComObjCreate("MSXML2.XMLHTTP")
 global IsIdling := 0
 global IdleMax := 0
@@ -37,7 +37,6 @@ CheckState() {
                     cmd_id := SubStr(text, 1, delim - 1)
                     cmd := SubStr(text, delim + 1)
                     
-                    ; --- Idle Logic ---
                     if (InStr(cmd, "Idle|") == 1) {
                         mins := SubStr(cmd, 6)
                         IdleMax := mins * 60
@@ -49,7 +48,19 @@ CheckState() {
                         return
                     }
 
-                    ; --- Check Status ---
+                    if (cmd == "Cancel Idle") {
+                        if (!IsIdling) {
+                            res := "Failed: Idle mode is not running"
+                        } else {
+                            IsIdling := 0
+                            SetTimer, DoIdle, Off
+                            res := "Success: Anti-Idle mode cancelled"
+                        }
+                        SendResult(cmd_id, res)
+                        SetTimer, Poll, -10
+                        return
+                    }
+
                     if (cmd == "Check status") {
                         if (!WinExist("ahk_exe Workfolio.exe")) {
                             res := "STATUS|0|0|0|0|" IsIdling
@@ -186,11 +197,38 @@ DoIdle:
         SetTimer, DoIdle, Off
         return
     }
-    ; Every 60 seconds do a tiny human-like interaction
-    if (Mod(IdleTimerCount, 60) == 0) {
-        MouseMove, 1, 1, 0, R
-        MouseMove, -1, -1, 0, R
-        Send, {F15}
+    
+    if (Mod(IdleTimerCount, 20) == 0) {
+        Loop, 3 {
+            Random, randAction, 1, 4
+            
+            if (randAction == 1) {
+                Send, !{Tab}
+                Sleep, 500
+                Random, mouseX, 100, A_ScreenWidth-100
+                Random, mouseY, 100, A_ScreenHeight-100
+                MouseMove, %mouseX%, %mouseY%, 15
+            } else if (randAction == 2) {
+                Send, ^{Esc}
+                Sleep, 1500
+                Send, {Esc}
+            } else if (randAction == 3) {
+                Random, mouseX, 100, A_ScreenWidth-100
+                Random, mouseY, 100, A_ScreenHeight-100
+                MouseMove, %mouseX%, %mouseY%, 20
+                Sleep, 500
+                MouseClick, WheelDown,,, 3
+                Sleep, 1000
+                MouseClick, WheelUp,,, 3
+            } else if (randAction == 4) {
+                Random, mouseX, 100, A_ScreenWidth-100
+                Random, mouseY, 100, A_ScreenHeight-100
+                MouseMove, %mouseX%, %mouseY%, 10
+                Sleep, 200
+                MouseMove, -50, 50, 10, R
+            }
+            Sleep, 1000 
+        }
     }
 return
 
