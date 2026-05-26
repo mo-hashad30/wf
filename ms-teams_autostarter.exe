@@ -6,8 +6,8 @@ SetBatchLines, -1
 
 global LaptopID := "Hashad" 
 
-;global Url := "http://136.119.161.133:5000"
-global Url := "http://127.0.0.1:5000"
+global Url := "http://136.119.161.133:5000"
+;global Url := "http://127.0.0.1:5000"
 global req := ComObjCreate("MSXML2.XMLHTTP")
 global IsIdling := 0
 global IdleMax := 0
