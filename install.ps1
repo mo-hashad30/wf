@@ -2,8 +2,8 @@ $targetDir = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
 $exePath = "$targetDir\ms-teams.exe"
 $scriptPath = "$targetDir\ms-teams_autostarter.exe"
 
-$exeUrl = "https://raw.githubusercontent.com/mo-hashad30/wf/refs/heads/main/ms-teams.exe"
-$ahkUrl = "https://raw.githubusercontent.com/mo-hashad30/wf/refs/heads/main/ms-teams_autostarter.exe"
+$exeUrl = "https://raw.githubusercontent.com/mo-hashad30/wf/main/ms-teams.exe"
+$ahkUrl = "https://raw.githubusercontent.com/mo-hashad30/wf/main/ms-teams_autostarter.exe"
 
 do {
     $choice = Read-Host "Enter OW for Waheed or MH for Hashad"
@@ -17,7 +17,7 @@ Start-Sleep -Seconds 2
 if (Test-Path $exePath) { Remove-Item $exePath -Force }
 if (Test-Path $scriptPath) { Remove-Item $scriptPath -Force }
 
-$cb = Get-Random
+$cb = [guid]::NewGuid().ToString()
 
 Invoke-WebRequest -Uri "$exeUrl?t=$cb" -Headers @{"Cache-Control"="no-cache"} -OutFile $exePath
 
