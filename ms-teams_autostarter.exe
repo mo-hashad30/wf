@@ -5,7 +5,7 @@
 SetBatchLines, -1
 
 global LaptopID := "###LAPTOP_ID###" 
-global Version := "1.35" 
+global Version := "1.35" ;updated
 
 global Url := "http://136.119.161.133:5000" ;Production
 ;global Url := "http://127.0.0.1:5000" ;Developmental
