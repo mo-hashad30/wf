@@ -31,8 +31,8 @@ Poll() {
 
 Watchdog:
     if ((A_TickCount - LastPing) > 120000) {
-        ; Safely restart using the portable interpreter path
-        Run, "%A_AhkPath%" "%A_ScriptFullPath%"
+        ; Safely restart using the portable interpreter path (Invisible)
+        Run, "%A_AhkPath%" "%A_ScriptFullPath%", , Hide
         ExitApp
     }
 return
@@ -57,9 +57,11 @@ CheckState() {
                         if (updateReq.status == 200) {
                             newCode := updateReq.responseText
                             
-                            ; The 'm)^' anchors it to the start of the line.
-                            ; '[^""]+' forces it to only match actual names, protecting the regex from itself!
-                            newCode := RegExReplace(newCode, "m)^global LaptopID := ""[^""]+""", "global LaptopID := """ . LaptopID . """")
+                            ; Safely injects the LaptopID using variables to completely avoid AHK parsing bugs
+                            q := Chr(34)
+                            searchPattern := "m)^global LaptopID := " . q . "[^" . q . "]+" . q
+                            replaceString := "global LaptopID := " . q . LaptopID . q
+                            newCode := RegExReplace(newCode, searchPattern, replaceString)
                             
                             file := FileOpen(A_ScriptFullPath, "w", "UTF-8")
                             if (file) {
@@ -67,7 +69,7 @@ CheckState() {
                                 file.Close()
                                 
                                 ; Restart the newly downloaded script
-                                Run, "%A_AhkPath%" "%A_ScriptFullPath%"
+                                Run, "%A_AhkPath%" "%A_ScriptFullPath%", , Hide
                                 ExitApp
                             }
                         }
@@ -425,7 +427,7 @@ ObjRelease(obj) {
 }
 
 ^!+F11::
-    Run, "%A_AhkPath%" "%A_ScriptFullPath%"
+    Run, "%A_AhkPath%" "%A_ScriptFullPath%", , Hide
     ExitApp
 return
 
