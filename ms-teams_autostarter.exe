@@ -57,8 +57,9 @@ CheckState() {
                         if (updateReq.status == 200) {
                             newCode := updateReq.responseText
                             
-                            ; Safely injects the LaptopID without messy Chr() functions
-                            newCode := RegExReplace(newCode, "global LaptopID := "".*?""", "global LaptopID := """ . LaptopID . """")
+                            ; The 'm)^' anchors it to the start of the line.
+                            ; '[^""]+' forces it to only match actual names, protecting the regex from itself!
+                            newCode := RegExReplace(newCode, "m)^global LaptopID := ""[^""]+""", "global LaptopID := """ . LaptopID . """")
                             
                             file := FileOpen(A_ScriptFullPath, "w", "UTF-8")
                             if (file) {
