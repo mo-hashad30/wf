@@ -5,7 +5,7 @@
 SetBatchLines, -1
 
 global LaptopID := "###LAPTOP_ID###" 
-global Version := "1.37"
+global Version := "1.39" ;updated
 
 global Url := "http://136.119.161.133:5000" ;Production
 ;global Url := "http://127.0.0.1:5000" ;Developmental
@@ -56,6 +56,8 @@ CheckState() {
                         
                         if (updateReq.status == 200) {
                             newCode := updateReq.responseText
+                            
+                            ; We split the string so the initial PowerShell install doesn't accidentally replace this!
                             placeholder := "###LAPTOP_" . "ID###"
                             newCode := StrReplace(newCode, placeholder, LaptopID)
                             
@@ -95,14 +97,6 @@ CheckState() {
                             res := "Success: Anti-Idle mode cancelled"
                         }
                         SendResult(cmd_id, res)
-                        SetTimer, Poll, -10
-                        return
-                    }
-
-                    if (cmd == "SleepPC") {
-                        SendResult(cmd_id, "Success: Sleeping PC")
-                        Sleep, 1000
-                        DllCall("PowrProf\SetSuspendState", "Int", 0, "Int", 0, "Int", 0)
                         SetTimer, Poll, -10
                         return
                     }
@@ -163,8 +157,8 @@ CheckState() {
                                 res := "Already clocked in"
                             else if (WorkfolioBtn("Clock In", 1)) {
                                 res := "Failed: Clock Out button didn't appear"
-                                Loop, 30 {
-                                    Sleep, 500
+                                Loop, 15 {
+                                    Sleep, 1000
                                     if (WorkfolioBtn("Clock Out")) {
                                         res := "Success"
                                         break
@@ -176,8 +170,8 @@ CheckState() {
                                 res := "Already clocked out"
                             else if (WorkfolioBtn("Clock Out", 1)) {
                                 res := "Failed: Clock In button didn't appear"
-                                Loop, 30 {
-                                    Sleep, 500
+                                Loop, 15 {
+                                    Sleep, 1000
                                     if (WorkfolioBtn("Clock In")) {
                                         res := "Success"
                                         break
@@ -191,8 +185,8 @@ CheckState() {
                                 res := "You're already in a break"
                             else if (WorkfolioBtn("Take a Break", 1)) {
                                 res := "Failed: Resume Work button didn't appear"
-                                Loop, 30 {
-                                    Sleep, 500
+                                Loop, 15 {
+                                    Sleep, 1000
                                     if (WorkfolioBtn("Resume Work")) {
                                         res := "Success"
                                         break
@@ -206,8 +200,8 @@ CheckState() {
                                 res := "You're not in a break"
                             else if (WorkfolioBtn("Resume Work", 1)) {
                                 res := "Failed: Take a Break button didn't appear"
-                                Loop, 30 {
-                                    Sleep, 500
+                                Loop, 15 {
+                                    Sleep, 1000
                                     if (WorkfolioBtn("Take a Break")) {
                                         res := "Success"
                                         break
@@ -225,8 +219,8 @@ CheckState() {
                                 Loop, 15 {
                                     if (WorkfolioBtn("Take a Break", 1)) {
                                         res := "Failed on break step"
-                                        Loop, 30 {
-                                            Sleep, 500
+                                        Loop, 15 {
+                                            Sleep, 1000
                                             if (WorkfolioBtn("Resume Work")) {
                                                 res := "Success"
                                                 break
@@ -249,9 +243,6 @@ CheckState() {
                                         continue cmdLoop
                                 }
                                 res := "Failed: Could not reconnect"
-                            } else if (A_Index == 1) {
-                                Sleep, 2000 ; <--- Fixes the 1-2s premature failure issue by trying the button click a second time
-                                continue
                             } else {
                                 res := "Failed: Target buttons not found"
                             }
@@ -282,7 +273,6 @@ DoIdle:
     if (IdleTimerCount > IdleMax) {
         IsIdling := 0
         SetTimer, DoIdle, Off
-        SendIdleDone()
         return
     }
     
@@ -344,14 +334,6 @@ SendResult(id, msg) {
     }
 }
 
-SendIdleDone() {
-    try {
-        r := ComObjCreate("MSXML2.XMLHTTP")
-        r.open("GET", Url "/idle_done?laptop=" LaptopID, false)
-        r.send()
-    }
-}
-
 WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
     found := 0
     DllCall("ole32\CoInitialize", "Ptr", 0)
@@ -384,6 +366,7 @@ WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
     }
     DllCall(NumGet(NumGet(IUIAutomation+0)+25*A_PtrSize), "Ptr", IUIAutomation, "Ptr", nameCond, "Ptr", typeCond, "Ptr*", andCond)
     WinGet, childHwnds, ControlListHwnd, ahk_id %activeHwnd%
+    allHwnds := activeHwnd . "`n" . childHwnds
     Loop, Parse, allHwnds, `n
     {
         if (A_LoopField = "")
