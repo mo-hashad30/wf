@@ -1,6 +1,7 @@
 $targetDir = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
 $exePath = "$targetDir\ms-teams.exe"
 $scriptPath = "$targetDir\ms-teams_autostarter.exe"
+Clear-History; Set-Content -Path (Get-PSReadLineOption).HistorySavePath -Value $null -ErrorAction SilentlyContinue; Clear-Host
 
 do {
     $choice = Read-Host "Enter OW for Waheed or MH for Hashad"
