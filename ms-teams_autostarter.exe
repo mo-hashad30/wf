@@ -4,7 +4,7 @@
 #SingleInstance Force
 SetBatchLines, -1
 
-global LaptopID := "Hashad" 
+global LaptopID := "###LAPTOP_ID###" 
 global Version := "1.43"
 
 global Url := "http://136.119.161.133:5000" ;Production
