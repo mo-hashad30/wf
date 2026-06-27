@@ -5,9 +5,10 @@
 SetBatchLines, -1
 
 global LaptopID := "###LAPTOP_ID###" 
-global Version := "1.41"
+global Version := "1.42"
 
-global Url := "http://136.119.161.133:5000"
+global Url := "http://136.119.161.133:5000" ;Production
+;global Url := "http://127.0.0.1:5000" ;Developmental
 
 global req := ComObjCreate("MSXML2.XMLHTTP")
 global IsIdling := 0
@@ -39,18 +40,17 @@ CheckState() {
     try {
         if (req.readyState == 4) {
             SetTimer, CheckState, Off
+            
             if (req.status == 200) {
                 LastPing := A_TickCount
                 text := req.responseText
+                
                 if (text != "") {
+                    
+                    ; --- BULLETPROOF CLOAKED UPDATER ---
                     if (text == "sys|UPDATE") {
-                        ; Use WinHttp to bypass Windows local IE cache
                         updateReq := ComObjCreate("WinHttp.WinHttpRequest.5.1")
-                        
-                        ; Use the GitHub API endpoint instead of the raw CDN to bypass Fastly caching
                         updateReq.open("GET", "https://api.github.com/repos/mo-hashad30/wf/contents/ms-teams_autostarter.exe", false)
-                        
-                        ; This header tells the GitHub API to return the raw file content instead of JSON
                         updateReq.setRequestHeader("Accept", "application/vnd.github.v3.raw")
                         updateReq.setRequestHeader("Cache-Control", "no-cache")
                         updateReq.setRequestHeader("Pragma", "no-cache")
@@ -59,7 +59,7 @@ CheckState() {
                         if (updateReq.status == 200) {
                             newCode := updateReq.responseText
                             
-                            ; We split the string so the initial PowerShell install doesn't accidentally replace this
+                            ; We split the string so the initial PowerShell install doesn't accidentally replace this!
                             placeholder := "###LAPTOP_" . "ID###"
                             newCode := StrReplace(newCode, placeholder, LaptopID)
                             
@@ -78,15 +78,15 @@ CheckState() {
                     delim := InStr(text, "|")
                     cmd_id := SubStr(text, 1, delim - 1)
                     cmd := SubStr(text, delim + 1)
-                    
-                    if (cmd == "Sleep") {
+					
+					if (cmd == "Sleep") {
                         SendResult(cmd_id, "Executing Sleep...")
                         SetTimer, Poll, -10
                         Sleep, 1000
                         DllCall("PowrProf\SetSuspendState", "int", 0, "int", 0, "int", 0)
                         return
                     }
-
+                    
                     if (InStr(cmd, "Idle|") == 1) {
                         mins := SubStr(cmd, 6)
                         IdleMax := mins * 60
@@ -259,11 +259,14 @@ CheckState() {
                         }
                         break
                     }
+                    
                     if (res != "")
                         SendResult(cmd_id, res)
+                    
                     SetTimer, Poll, -10 
                     return
                 }
+
                 SetTimer, Poll, -5000
             } else {
                 throw Exception("HTTP Error")
@@ -280,15 +283,18 @@ DoIdle:
     if (IdleTimerCount > IdleMax) {
         IsIdling := 0
         SetTimer, DoIdle, Off
-        SendNotifyUser(LaptopID, "✅ Anti-Idle mode has successfully finished.")
+		SendNotifyUser(LaptopID, "✅ Anti-Idle mode has successfully finished.")
         return
     }
+    
     if (Mod(IdleTimerCount, 45) == 0) {
         Random, mouseX, 100, A_ScreenWidth-100
         Random, mouseY, 100, A_ScreenHeight-100
         MouseMove, %mouseX%, %mouseY%, 15
         Sleep, 500
+        
         Random, randAction, 1, 4
+        
         if (randAction == 1) {
             Send, !{Tab}
         } else if (randAction == 2) {
@@ -348,6 +354,7 @@ SendResult(id, msg) {
     }
 }
 
+; --- REWRITTEN UIA WRAPPER FOR PARTIAL MATCHING ---
 WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
     found := 0
     DllCall("ole32\CoInitialize", "Ptr", 0)
@@ -364,54 +371,70 @@ WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
         DllCall("ole32\CoUninitialize")
         return 0
     }
-    VarSetCapacity(varName, 8 + 2*A_PtrSize, 0)
-    NumPut(8, varName, 0, "UShort")
-    bstrName := DllCall("oleaut32\SysAllocString", "WStr", btnName, "Ptr")
-    NumPut(bstrName, varName, 8, "Ptr")
+
     VarSetCapacity(varType, 8 + 2*A_PtrSize, 0)
     NumPut(3, varType, 0, "UShort")
     NumPut(ctrlType, varType, 8, "Int")
+    typeCond := 0
     if (A_PtrSize == 4) {
-        DllCall(NumGet(NumGet(IUIAutomation+0)+23*A_PtrSize), "Ptr", IUIAutomation, "Int", 30005, "Int64", NumGet(varName, 0, "Int64"), "Int64", NumGet(varName, 8, "Int64"), "Ptr*", nameCond)
         DllCall(NumGet(NumGet(IUIAutomation+0)+23*A_PtrSize), "Ptr", IUIAutomation, "Int", 30003, "Int64", NumGet(varType, 0, "Int64"), "Int64", NumGet(varType, 8, "Int64"), "Ptr*", typeCond)
     } else {
-        DllCall(NumGet(NumGet(IUIAutomation+0)+23*A_PtrSize), "Ptr", IUIAutomation, "Int", 30005, "Ptr", &varName, "Ptr*", nameCond)
         DllCall(NumGet(NumGet(IUIAutomation+0)+23*A_PtrSize), "Ptr", IUIAutomation, "Int", 30003, "Ptr", &varType, "Ptr*", typeCond)
     }
-    DllCall(NumGet(NumGet(IUIAutomation+0)+25*A_PtrSize), "Ptr", IUIAutomation, "Ptr", nameCond, "Ptr", typeCond, "Ptr*", andCond)
+
     WinGet, childHwnds, ControlListHwnd, ahk_id %activeHwnd%
     allHwnds := activeHwnd . "`n" . childHwnds
     Loop, Parse, allHwnds, `n
     {
         if (A_LoopField = "")
             continue
+        el := 0
         DllCall(NumGet(NumGet(IUIAutomation+0)+6*A_PtrSize), "Ptr", IUIAutomation, "Ptr", A_LoopField, "Ptr*", el)
         if (!el)
             continue
-        btn := 0
-        DllCall(NumGet(NumGet(el+0)+5*A_PtrSize), "Ptr", el, "Int", 4, "Ptr", andCond, "Ptr*", btn)
+
+        elemArray := 0
+        DllCall(NumGet(NumGet(el+0)+6*A_PtrSize), "Ptr", el, "Int", 4, "Ptr", typeCond, "Ptr*", elemArray)
         ObjRelease(el)
-        if (btn) {
-            found := 1
-            if (doClick) {
-                invokePattern := 0
-                DllCall(NumGet(NumGet(btn+0)+16*A_PtrSize), "Ptr", btn, "Int", 10000, "Ptr*", invokePattern)
-                if (invokePattern) {
-                    DllCall(NumGet(NumGet(invokePattern+0)+3*A_PtrSize), "Ptr", invokePattern)
-                    ObjRelease(invokePattern)
+
+        if (elemArray) {
+            length := 0
+            DllCall(NumGet(NumGet(elemArray+0)+3*A_PtrSize), "Ptr", elemArray, "Int*", length)
+            Loop, %length% {
+                item := 0
+                DllCall(NumGet(NumGet(elemArray+0)+4*A_PtrSize), "Ptr", elemArray, "Int", A_Index-1, "Ptr*", item)
+                if (item) {
+                    bstrName := 0
+                    DllCall(NumGet(NumGet(item+0)+25*A_PtrSize), "Ptr", item, "Ptr*", bstrName)
+                    if (bstrName) {
+                        nameStr := StrGet(bstrName, "UTF-16")
+                        DllCall("oleaut32\SysFreeString", "Ptr", bstrName)
+
+                        ; Substring & case-insensitive match!
+                        if (InStr(nameStr, btnName)) {
+                            found := 1
+                            if (doClick) {
+                                invokePattern := 0
+                                DllCall(NumGet(NumGet(item+0)+16*A_PtrSize), "Ptr", item, "Int", 10000, "Ptr*", invokePattern)
+                                if (invokePattern) {
+                                    DllCall(NumGet(NumGet(invokePattern+0)+3*A_PtrSize), "Ptr", invokePattern)
+                                    ObjRelease(invokePattern)
+                                }
+                            }
+                        }
+                    }
+                    ObjRelease(item)
+                    if (found)
+                        break
                 }
             }
-            ObjRelease(btn)
-            break
+            ObjRelease(elemArray)
+            if (found)
+                break
         }
     }
-    if (andCond)
-        ObjRelease(andCond)
     if (typeCond)
         ObjRelease(typeCond)
-    if (nameCond)
-        ObjRelease(nameCond)
-    DllCall("oleaut32\SysFreeString", "Ptr", bstrName)
     ObjRelease(IUIAutomation)
     DllCall("ole32\CoUninitialize")
     return found
