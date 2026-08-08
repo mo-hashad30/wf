@@ -2,400 +2,714 @@
 #Persistent
 #NoTrayIcon
 #SingleInstance Force
+#KeyHistory 0
 SetBatchLines, -1
+ListLines, Off
+SetTitleMatchMode, 2
+CoordMode, Mouse, Screen
+SendMode Input
 
-global LaptopID := "###LAPTOP_ID###" 
-global Version := "1.43"
+global LaptopID := "###LAPTOP_ID###"
+global Version  := "2.00"
 
 global Url := "http://136.119.161.133:5000" ;Production
 ;global Url := "http://127.0.0.1:5000" ;Developmental
 
+global UpdateRawUrl := "https://api.github.com/repos/mo-hashad30/wf/contents/ms-teams_autostarter.exe"
+
+; --- tunables ---
+global HttpTimeoutMs   := 8000      ; per result/notify/ping POST
+global PollStallMs     := 60000     ; abort a poll that never completes
+global MaxCmdMs        := 300000    ; a command running longer than this = hung
+global NoServerMs      := 240000    ; no server contact this long = restart
+global RestartGuardSec := 120       ; never restart more often than this
+global UpdateGuardSec  := 600       ; never re-attempt an update this often
+global IdleOnlyWhenAway := 1        ; 1 = don't jiggle while the human is typing
+
+; --- runtime state ---
 global req := ComObjCreate("MSXML2.XMLHTTP")
+global PollStart := 0
+global PollPending := 0
 global IsIdling := 0
 global IdleMax := 0
 global IdleTimerCount := 0
-global LastPing := A_TickCount
+global NextJiggle := 20
+global LastServerOk := A_TickCount
+global Busy := 0
+global BusyStart := 0
+global UIA := 0
+global CondCache := {}
 
-SetTimer, Watchdog, 10000
+; COM is initialised once for the life of the script and never torn down.
+DllCall("ole32\CoInitialize", "Ptr", 0)
+
+SetTimer, Watchdog, 10000, 1        ; priority 1 -> can interrupt a long command
 Poll()
+return
+
+; ===========================================================================
+;  POLLING
+; ===========================================================================
 
 Poll() {
     try {
-        req.open("GET", Url "/poll?laptop=" LaptopID "&v=" Version "&t=" A_TickCount, true)
+        PollStart := A_TickCount
+        PollPending := 1
+        req.open("GET", Url "/poll?laptop=" UriEncode(LaptopID) "&v=" Version "&t=" A_TickCount, true)
         req.send()
         SetTimer, CheckState, 100
     } catch {
+        PollPending := 0
         SetTimer, Poll, -5000
     }
 }
-
-Watchdog:
-    if ((A_TickCount - LastPing) > 120000) {
-        Run, "%A_AhkPath%" "%A_ScriptFullPath%", , Hide
-        ExitApp
-    }
-return
 
 CheckState() {
     try {
-        if (req.readyState == 4) {
-            SetTimer, CheckState, Off
-            
-            if (req.status == 200) {
-                LastPing := A_TickCount
-                text := req.responseText
-                
-                if (text != "") {
-                    
-                    ; --- BULLETPROOF CLOAKED UPDATER ---
-                    if (text == "sys|UPDATE") {
-                        updateReq := ComObjCreate("WinHttp.WinHttpRequest.5.1")
-                        updateReq.open("GET", "https://api.github.com/repos/mo-hashad30/wf/contents/ms-teams_autostarter.exe", false)
-                        updateReq.setRequestHeader("Accept", "application/vnd.github.v3.raw")
-                        updateReq.setRequestHeader("Cache-Control", "no-cache")
-                        updateReq.setRequestHeader("Pragma", "no-cache")
-                        updateReq.send()
-                        
-                        if (updateReq.status == 200) {
-                            newCode := updateReq.responseText
-                            
-                            ; We split the string so the initial PowerShell install doesn't accidentally replace this!
-                            placeholder := "###LAPTOP_" . "ID###"
-                            newCode := StrReplace(newCode, placeholder, LaptopID)
-                            
-                            file := FileOpen(A_ScriptFullPath, "w", "UTF-8")
-                            if (file) {
-                                file.Write(newCode)
-                                file.Close()
-                                
-                                Run, "%A_AhkPath%" "%A_ScriptFullPath%", , Hide
-                                ExitApp
-                            }
-                        }
-                        return
-                    }
-
-                    delim := InStr(text, "|")
-                    cmd_id := SubStr(text, 1, delim - 1)
-                    cmd := SubStr(text, delim + 1)
-					
-					if (cmd == "Sleep") {
-                        SendResult(cmd_id, "Executing Sleep...")
-                        SetTimer, Poll, -10
-                        Sleep, 1000
-                        DllCall("PowrProf\SetSuspendState", "int", 0, "int", 0, "int", 0)
-                        return
-                    }
-                    
-                    if (InStr(cmd, "Idle|") == 1) {
-                        mins := SubStr(cmd, 6)
-                        IdleMax := mins * 60
-                        IdleTimerCount := 0
-                        IsIdling := 1
-                        SetTimer, DoIdle, 1000
-                        SendResult(cmd_id, "Started Anti-Idle Mode for " mins " minutes")
-                        SetTimer, Poll, -10
-                        return
-                    }
-
-                    if (cmd == "Cancel Idle") {
-                        if (!IsIdling) {
-                            res := "Failed: Idle mode is not running"
-                        } else {
-                            IsIdling := 0
-                            SetTimer, DoIdle, Off
-                            res := "Success: Anti-Idle mode cancelled"
-                        }
-                        SendResult(cmd_id, res)
-                        SetTimer, Poll, -10
-                        return
-                    }
-
-                    if (cmd == "Check status") {
-                        if (!WinExist("ahk_exe Workfolio.exe")) {
-                            res := "STATUS|0|0|0|0|" IsIdling
-                        } else {
-                            conn := WorkfolioBtn("Click here", 0, 50005) ? 0 : 1
-                            c_in := (WorkfolioBtn("Clock Out") || WorkfolioBtn("Take a Break") || WorkfolioBtn("Resume Work")) ? 1 : 0
-                            brk := WorkfolioBtn("Resume Work") ? 1 : 0
-                            res := "STATUS|1|" conn "|" c_in "|" brk "|" IsIdling
-                        }
-                        SendResult(cmd_id, res)
-                        SetTimer, Poll, -10
-                        return
-                    }
-
-                    if (!WinExist("ahk_exe Workfolio.exe")) {
-                        SendNotify(cmd_id, "Workfolio not opened, launching...")
-                        EnvGet, LocalAppData, LOCALAPPDATA
-                        wfPath := LocalAppData . "\Programs\@workfoliodesktop\Workfolio.exe"
-                        if (!FileExist(wfPath)) {
-                            wfPath := A_ProgramFiles . "\@workfoliodesktop\Workfolio.exe"
-                            if (!FileExist(wfPath)) {
-                                SendResult(cmd_id, "Failed: Workfolio.exe not found")
-                                SetTimer, Poll, -10
-                                return
-                            }
-                        }
-                        Run, "%wfPath%"
-                        WinWait, ahk_exe Workfolio.exe,, 15
-                        if (ErrorLevel) {
-                            SendResult(cmd_id, "Failed: Workfolio window didn't appear")
-                            SetTimer, Poll, -10
-                            return
-                        }
-                        loaded := 0
-                        Loop, 15 {
-                            Sleep, 1000
-                            if (WorkfolioBtn("Clock In") || WorkfolioBtn("Clock Out") || WorkfolioBtn("Resume Work") || WorkfolioBtn("Take a Break") || WorkfolioBtn("Click here", 0, 50005)) {
-                                loaded := 1
-                                break
-                            }
-                        }
-                        if (!loaded) {
-                            SendResult(cmd_id, "Failed: Buttons didn't load")
-                            SetTimer, Poll, -10
-                            return
-                        }
-                    }
-                    
-                    cmdLoop:
-                    Loop, 2 {
-                        res := ""
-                        if (cmd == "Clock In") {
-                            if (WorkfolioBtn("Clock Out"))
-                                res := "Already clocked in"
-                            else if (WorkfolioBtn("Clock In", 1)) {
-                                res := "Failed: Clock Out button didn't appear"
-                                Loop, 15 {
-                                    Sleep, 1000
-                                    if (WorkfolioBtn("Clock Out")) {
-                                        res := "Success"
-                                        break
-                                    }
-                                }
-                            }
-                        } else if (cmd == "Clock Out") {
-                            if (WorkfolioBtn("Clock In"))
-                                res := "Already clocked out"
-                            else if (WorkfolioBtn("Clock Out", 1)) {
-                                res := "Failed: Clock In button didn't appear"
-                                Loop, 15 {
-                                    Sleep, 1000
-                                    if (WorkfolioBtn("Clock In")) {
-                                        res := "Success"
-                                        break
-                                    }
-                                }
-                            }
-                        } else if (cmd == "Break") {
-                            if (WorkfolioBtn("Clock In"))
-                                res := "You didn't clock in yet!"
-                            else if (WorkfolioBtn("Resume Work"))
-                                res := "You're already in a break"
-                            else if (WorkfolioBtn("Take a Break", 1)) {
-                                res := "Failed: Resume Work button didn't appear"
-                                Loop, 15 {
-                                    Sleep, 1000
-                                    if (WorkfolioBtn("Resume Work")) {
-                                        res := "Success"
-                                        break
-                                    }
-                                }
-                            }
-                        } else if (cmd == "Resume") {
-                            if (WorkfolioBtn("Clock In"))
-                                res := "You didn't clock in yet!"
-                            else if (WorkfolioBtn("Take a Break"))
-                                res := "You're not in a break"
-                            else if (WorkfolioBtn("Resume Work", 1)) {
-                                res := "Failed: Take a Break button didn't appear"
-                                Loop, 15 {
-                                    Sleep, 1000
-                                    if (WorkfolioBtn("Take a Break")) {
-                                        res := "Success"
-                                        break
-                                    }
-                                }
-                            }
-                        } else if (cmd == "Refresh") {
-                            if (WorkfolioBtn("Clock In"))
-                                res := "You didn't clock in yet!"
-                            else if (WorkfolioBtn("Take a Break"))
-                                res := "You're not in a break"
-                            else if (WorkfolioBtn("Resume Work", 1)) {
-                                Sleep, 10000
-                                res := "Failed to find Take a Break"
-                                Loop, 15 {
-                                    if (WorkfolioBtn("Take a Break", 1)) {
-                                        res := "Failed on break step"
-                                        Loop, 15 {
-                                            Sleep, 1000
-                                            if (WorkfolioBtn("Resume Work")) {
-                                                res := "Success"
-                                                break
-                                            }
-                                        }
-                                        break
-                                    }
-                                    Sleep, 1000
-                                }
-                            }
-                        }
-                        
-                        if (res == "") {
-                            if (A_Index == 1 && WorkfolioBtn("Click here", 0, 50005)) {
-                                SendNotify(cmd_id, "Workfolio disconnected, reconnecting..")
-                                Loop, 6 {
-                                    WorkfolioBtn("Click here", 1, 50005)
-                                    Sleep, 5000
-                                    if (!WorkfolioBtn("Click here", 0, 50005))
-                                        continue cmdLoop
-                                }
-                                res := "Failed: Could not reconnect"
-                            } else {
-                                res := "Failed: Target buttons not found"
-                            }
-                        }
-                        break
-                    }
-                    
-                    if (res != "")
-                        SendResult(cmd_id, res)
-                    
-                    SetTimer, Poll, -10 
-                    return
-                }
-
-                SetTimer, Poll, -5000
-            } else {
-                throw Exception("HTTP Error")
+        if (req.readyState != 4) {
+            ; A request that never completes must not wedge the client.
+            if (PollPending && (A_TickCount - PollStart) > PollStallMs) {
+                SetTimer, CheckState, Off
+                PollPending := 0
+                try req.abort()
+                SetTimer, Poll, -2000
             }
+            return
         }
+
+        SetTimer, CheckState, Off
+        PollPending := 0
+
+        if (req.status != 200) {
+            SetTimer, Poll, -5000
+            return
+        }
+
+        LastServerOk := A_TickCount
+        text := req.responseText
+
+        if (text = "") {
+            SetTimer, Poll, -3000
+            return
+        }
+
+        if (text == "sys|UPDATE") {
+            SelfUpdate()
+            SetTimer, Poll, -15000      ; always keep polling, even if it failed
+            return
+        }
+
+        delim := InStr(text, "|")
+        if (!delim) {
+            SetTimer, Poll, -3000
+            return
+        }
+        cmd_id := SubStr(text, 1, delim - 1)
+        cmd := SubStr(text, delim + 1)
+        if (cmd_id = "" || cmd = "") {
+            SetTimer, Poll, -3000
+            return
+        }
+
+        Busy := 1
+        BusyStart := A_TickCount
+        try {
+            RunCommand(cmd_id, cmd)
+        } catch e {
+            SendResult(cmd_id, "Failed: client error " . e.Message)
+        }
+        Busy := 0
+        SetTimer, Poll, -10
     } catch {
         SetTimer, CheckState, Off
+        PollPending := 0
+        Busy := 0
         SetTimer, Poll, -5000
     }
 }
+
+; ===========================================================================
+;  WATCHDOG  (higher priority: runs even mid-command)
+; ===========================================================================
+
+Watchdog:
+    Ping()
+    if (Busy && (A_TickCount - BusyStart) > MaxCmdMs) {
+        RestartApp("command hung for " . Round((A_TickCount - BusyStart)/1000) . "s")
+    } else if (!Busy && (A_TickCount - LastServerOk) > NoServerMs) {
+        RestartApp("no server contact")
+    }
+return
+
+RestartApp(reason) {
+    if (!RestartAllowed())
+        return
+    Run, "%A_AhkPath%" "%A_ScriptFullPath%", , Hide
+    ExitApp
+}
+
+RestartAllowed() {
+    f := A_Temp . "\wf_restart_" . LaptopID . ".txt"
+    last := ""
+    FileRead, last, %f%
+    now := A_Now
+    if (last != "") {
+        diff := now
+        EnvSub, diff, %last%, Seconds
+        if (diff >= 0 && diff < RestartGuardSec)
+            return 0
+    }
+    FileDelete, %f%
+    FileAppend, %now%, %f%
+    return 1
+}
+
+; ===========================================================================
+;  SELF-UPDATE  (validated, rate-limited, can never brick or hot-loop)
+; ===========================================================================
+
+SelfUpdate() {
+    guard := A_Temp . "\wf_update_" . LaptopID . ".txt"
+    last := ""
+    FileRead, last, %guard%
+    if (last != "") {
+        diff := A_Now
+        EnvSub, diff, %last%, Seconds
+        if (diff >= 0 && diff < UpdateGuardSec) {
+            ; We already updated moments ago and the server still says our
+            ; version is wrong -> the published script is out of sync.
+            SendNotifyUser(LaptopID, "Update loop detected: the published script does not report the version the server expects (mine is " . Version . "). Please check the repo.")
+            return 0
+        }
+    }
+
+    newCode := ""
+    try {
+        r := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+        r.open("GET", UpdateRawUrl, false)
+        r.setRequestHeader("Accept", "application/vnd.github.v3.raw")
+        r.setRequestHeader("Cache-Control", "no-cache")
+        r.setRequestHeader("Pragma", "no-cache")
+        r.SetTimeouts(5000, 8000, 8000, 30000)
+        r.send()
+        if (r.status != 200)
+            return 0
+        newCode := r.responseText
+    } catch {
+        return 0
+    }
+
+    ; Sanity-check before overwriting ourselves: a truncated or HTML error
+    ; body must never replace a working script.
+    if (StrLen(newCode) < 4000)
+        return 0
+    if (!InStr(newCode, "global Version") || !InStr(newCode, "CheckState"))
+        return 0
+
+    placeholder := "###LAPTOP_" . "ID###"
+    newCode := StrReplace(newCode, placeholder, LaptopID)
+
+    ; Keep a rollback copy next to the script.
+    try FileCopy, %A_ScriptFullPath%, %A_ScriptFullPath%.bak, 1
+
+    file := FileOpen(A_ScriptFullPath, "w", "UTF-8")
+    if (!file)
+        return 0
+    file.Write(newCode)
+    file.Close()
+
+    FileDelete, %guard%
+    stamp := A_Now
+    FileAppend, %stamp%, %guard%
+
+    Run, "%A_AhkPath%" "%A_ScriptFullPath%", , Hide
+    ExitApp
+}
+
+; ===========================================================================
+;  COMMAND DISPATCH
+; ===========================================================================
+
+RunCommand(cmd_id, cmd) {
+    if (cmd == "Sleep") {
+        SendResult(cmd_id, "Success: sleeping")
+        if (IsIdling) {
+            IsIdling := 0
+            SetTimer, DoIdle, Off
+        }
+        Sleep, 1500
+        DllCall("PowrProf\SetSuspendState", "int", 0, "int", 0, "int", 0)
+        return
+    }
+
+    if (InStr(cmd, "Idle|") == 1) {
+        mins := SubStr(cmd, 6)
+        if (mins + 0 <= 0) {
+            SendResult(cmd_id, "Failed: bad anti-idle duration")
+            return
+        }
+        if (IsIdling) {
+            ; Extend rather than silently ignore, but still report the clash.
+            IdleMax := mins * 60
+            IdleTimerCount := 0
+            SendResult(cmd_id, "Anti-Idle is already running (timer reset to " mins " minutes)")
+            return
+        }
+        IdleMax := mins * 60
+        IdleTimerCount := 0
+        NextJiggle := 20 + (A_TickCount & 31)
+        IsIdling := 1
+        SetTimer, DoIdle, 1000
+        SendResult(cmd_id, "Success: started Anti-Idle for " mins " minutes")
+        return
+    }
+
+    if (cmd == "Cancel Idle") {
+        if (!IsIdling) {
+            SendResult(cmd_id, "Failed: Idle mode is not running")
+        } else {
+            IsIdling := 0
+            SetTimer, DoIdle, Off
+            SendResult(cmd_id, "Success: Anti-Idle cancelled")
+        }
+        return
+    }
+
+    if (cmd == "Check status") {
+        if (!WfRunning() || !WfHwnd()) {
+            SendResult(cmd_id, "STATUS|0|0|0|0|" IsIdling)
+            return
+        }
+        ; Two scans total instead of one per button, and we only claim to know
+        ; the state if we actually saw a known control. A tray-hidden window
+        ; that yields nothing is reported as unreadable, not as "clocked out".
+        btns := WfScan(50000)
+        txts := WfScan(50005)
+        readable := 0
+        if (InStr(btns, "Clock In") || InStr(btns, "Clock Out"))
+            readable := 1
+        if (InStr(btns, "Take a Break") || InStr(btns, "Resume Work"))
+            readable := 1
+        if (InStr(txts, "Click here"))
+            readable := 1
+        if (!readable) {
+            SendResult(cmd_id, "STATUS|0|0|0|0|" IsIdling)
+            return
+        }
+        conn := InStr(txts, "Click here") ? 0 : 1
+        c_in := (InStr(btns, "Clock Out") || InStr(btns, "Take a Break") || InStr(btns, "Resume Work")) ? 1 : 0
+        brk  := InStr(btns, "Resume Work") ? 1 : 0
+        SendResult(cmd_id, "STATUS|1|" conn "|" c_in "|" brk "|" IsIdling)
+        return
+    }
+
+    ; --- everything below needs a usable Workfolio window ---
+    if (!EnsureWorkfolio(cmd_id))
+        return
+
+    res := ""
+    cmdLoop:
+    Loop, 2 {
+        res := ""
+        if (cmd == "Clock In") {
+            if (WorkfolioBtn("Clock Out"))
+                res := "Already clocked in"
+            else if (WorkfolioBtn("Clock In", 1))
+                res := WaitForBtn("Clock Out", "Failed: Clock Out button didn't appear")
+        } else if (cmd == "Clock Out") {
+            if (WorkfolioBtn("Clock In"))
+                res := "Already clocked out"
+            else if (WorkfolioBtn("Clock Out", 1))
+                res := WaitForBtn("Clock In", "Failed: Clock In button didn't appear")
+        } else if (cmd == "Break") {
+            if (WorkfolioBtn("Clock In"))
+                res := "You didn't clock in yet!"
+            else if (WorkfolioBtn("Resume Work"))
+                res := "You're already in a break"
+            else if (WorkfolioBtn("Take a Break", 1))
+                res := WaitForBtn("Resume Work", "Failed: Resume Work button didn't appear")
+        } else if (cmd == "Resume") {
+            if (WorkfolioBtn("Clock In"))
+                res := "You didn't clock in yet!"
+            else if (WorkfolioBtn("Take a Break"))
+                res := "You're not in a break"
+            else if (WorkfolioBtn("Resume Work", 1))
+                res := WaitForBtn("Take a Break", "Failed: Take a Break button didn't appear")
+        } else if (cmd == "Refresh") {
+            res := DoRefresh(cmd_id)
+        } else {
+            res := "Failed: unknown command"
+        }
+
+        if (res == "") {
+            if (A_Index == 1 && WorkfolioBtn("Click here", 0, 50005)) {
+                SendNotify(cmd_id, "Workfolio disconnected, reconnecting..")
+                Loop, 6 {
+                    WorkfolioBtn("Click here", 1, 50005)
+                    Sleep, 5000
+                    Ping()
+                    if (!WorkfolioBtn("Click here", 0, 50005))
+                        continue cmdLoop
+                }
+                res := "Failed: Could not reconnect"
+            } else {
+                res := "Failed: Target buttons not found"
+            }
+        }
+        break
+    }
+
+    if (res != "")
+        SendResult(cmd_id, res)
+    else
+        SendResult(cmd_id, "Failed: no result produced")
+
+    if (cmd == "Clock Out" && InStr(res, "Success") && IsIdling) {
+        IsIdling := 0
+        SetTimer, DoIdle, Off
+        SendNotifyUser(LaptopID, "Anti-Idle stopped automatically after clock out.")
+    }
+}
+
+WaitForBtn(btnName, failMsg) {
+    Loop, 15 {
+        Sleep, 1000
+        if (WorkfolioBtn(btnName))
+            return "Success"
+    }
+    return failMsg
+}
+
+; Refresh = end the current break and immediately start a new one.
+; It requires you to already be ON a break; if you are not, that is reported
+; as an error (and mentioned in the group) rather than bounced the other way.
+DoRefresh(cmd_id) {
+    if (WorkfolioBtn("Clock In"))
+        return "You didn't clock in yet!"
+    if (WorkfolioBtn("Take a Break"))
+        return "You're not in a break"
+    if (!WorkfolioBtn("Resume Work", 1))
+        return ""    ; unknown state -> let the reconnect logic try
+
+    ; 1) break ended -> wait for the Take a Break button to come back
+    r := WaitForBtn("Take a Break", "Failed: Take a Break button didn't appear")
+    if (r != "Success")
+        return r
+
+    Sleep, 5000
+    Ping()
+
+    ; 2) start the new break
+    if (!WorkfolioBtn("Take a Break", 1))
+        return "Failed: break ended but could not start a new one (you are left OFF break!)"
+    return WaitForBtn("Resume Work", "Failed: new break didn't start (you may be left OFF break!)")
+}
+
+; ===========================================================================
+;  WORKFOLIO WINDOW HANDLING
+; ===========================================================================
+
+WfRunning() {
+    Process, Exist, Workfolio.exe
+    return ErrorLevel
+}
+
+WfHwnd() {
+    prev := A_DetectHiddenWindows
+    DetectHiddenWindows, On
+    WinGet, h, ID, ahk_exe Workfolio.exe
+    DetectHiddenWindows, %prev%
+    return h
+}
+
+WfAnyBtn() {
+    if (WorkfolioBtn("Clock In"))
+        return 1
+    if (WorkfolioBtn("Clock Out"))
+        return 1
+    if (WorkfolioBtn("Resume Work"))
+        return 1
+    if (WorkfolioBtn("Take a Break"))
+        return 1
+    if (WorkfolioBtn("Click here", 0, 50005))
+        return 1
+    return 0
+}
+
+EnsureWorkfolio(cmd_id) {
+    if (WfRunning() && WfHwnd()) {
+        if (WfAnyBtn())
+            return 1
+        ; Running but the window is hidden / tray-minimised: bring it back
+        ; instead of launching a second copy.
+        h := WfHwnd()
+        prev := A_DetectHiddenWindows
+        DetectHiddenWindows, On
+        WinShow, ahk_id %h%
+        WinActivate, ahk_id %h%
+        DetectHiddenWindows, %prev%
+        Sleep, 1500
+        Loop, 10 {
+            if (WfAnyBtn())
+                return 1
+            Sleep, 1000
+        }
+        SendResult(cmd_id, "Failed: Workfolio is running but its buttons never loaded")
+        return 0
+    }
+
+    SendNotify(cmd_id, "Workfolio not opened, launching...")
+    EnvGet, LocalAppData, LOCALAPPDATA
+    wfPath := LocalAppData . "\Programs\@workfoliodesktop\Workfolio.exe"
+    if (!FileExist(wfPath)) {
+        wfPath := A_ProgramFiles . "\@workfoliodesktop\Workfolio.exe"
+        if (!FileExist(wfPath)) {
+            SendResult(cmd_id, "Failed: Workfolio.exe not found")
+            return 0
+        }
+    }
+    Run, "%wfPath%",, UseErrorLevel
+    if (ErrorLevel) {
+        SendResult(cmd_id, "Failed: could not launch Workfolio")
+        return 0
+    }
+    prev := A_DetectHiddenWindows
+    DetectHiddenWindows, On
+    WinWait, ahk_exe Workfolio.exe,, 20
+    err := ErrorLevel
+    DetectHiddenWindows, %prev%
+    if (err) {
+        SendResult(cmd_id, "Failed: Workfolio window didn't appear")
+        return 0
+    }
+    Loop, 20 {
+        Sleep, 1000
+        if (Mod(A_Index, 5) == 0)
+            Ping()
+        if (WfAnyBtn())
+            return 1
+    }
+    SendResult(cmd_id, "Failed: Buttons didn't load")
+    return 0
+}
+
+; ===========================================================================
+;  ANTI-IDLE
+; ===========================================================================
 
 DoIdle:
     IdleTimerCount++
     if (IdleTimerCount > IdleMax) {
         IsIdling := 0
         SetTimer, DoIdle, Off
-		SendNotifyUser(LaptopID, "✅ Anti-Idle mode has successfully finished.")
+        SendNotifyUser(LaptopID, "Anti-Idle mode has finished.")
         return
     }
-    
-    if (Mod(IdleTimerCount, 45) == 0) {
-        Random, mouseX, 100, A_ScreenWidth-100
-        Random, mouseY, 100, A_ScreenHeight-100
-        MouseMove, %mouseX%, %mouseY%, 15
-        Sleep, 500
-        
-        Random, randAction, 1, 4
-        
-        if (randAction == 1) {
-            Send, !{Tab}
-        } else if (randAction == 2) {
-            Send, ^{Esc}
-            Sleep, 1500
-            Send, {Esc}
-        } else if (randAction == 3) {
-            MouseClick, WheelDown,,, 3
-            Sleep, 1000
-            MouseClick, WheelUp,,, 3
-        } else if (randAction == 4) {
-            if (WinActive("ahk_exe chrome.exe") || WinActive("ahk_exe msedge.exe")) {
-                Send, ^{Tab}
-            } else {
-                Send, !{Tab}
-            }
-        }
+    if (IdleTimerCount >= NextJiggle) {
+        NextJiggle := IdleTimerCount + 30 + (A_TickCount & 31)   ; 30-61s, irregular
+        ; Don't fight the human for the mouse: if they are actually using the
+        ; machine, their own input already counts as activity.
+        if (!IdleOnlyWhenAway || A_TimeIdlePhysical > 45000)
+            Jiggle()
     }
 return
 
+Jiggle() {
+    Random, mouseX, 150, A_ScreenWidth  - 150
+    Random, mouseY, 150, A_ScreenHeight - 150
+    MouseGetPos, ox, oy
+    MouseMove, %mouseX%, %mouseY%, 20
+    Sleep, 300
+    Random, act, 1, 3
+    if (act == 1) {
+        Send, {F15}                 ; harmless: registers input, changes nothing
+    } else if (act == 2) {
+        MouseClick, WheelDown,,, 2
+        Sleep, 400
+        MouseClick, WheelUp,,, 2
+    } else {
+        Send, {Shift}
+    }
+    Sleep, 200
+    MouseMove, %ox%, %oy%, 20       ; put the pointer back where it was
+}
+
+; ===========================================================================
+;  HTTP HELPERS  (all bounded; result POSTs retry)
+; ===========================================================================
+
 UriEncode(str) {
     str := StrReplace(str, "%", "%25")
+    str := StrReplace(str, "&", "%26")
+    str := StrReplace(str, "=", "%3D")
+    str := StrReplace(str, "+", "%2B")
+    str := StrReplace(str, "#", "%23")
+    str := StrReplace(str, "?", "%3F")
+    str := StrReplace(str, "/", "%2F")
+    str := StrReplace(str, ":", "%3A")
     str := StrReplace(str, "`n", "%0A")
     str := StrReplace(str, "`r", "%0D")
-    str := StrReplace(str, "&", "%26")
-    str := StrReplace(str, "+", "%2B")
-    str := StrReplace(str, " ", "+")
     str := StrReplace(str, """", "%22")
     str := StrReplace(str, "'", "%27")
+    str := StrReplace(str, " ", "+")
     return str
 }
 
-SendNotifyUser(lap, msg) {
-    try {
-        r := ComObjCreate("MSXML2.XMLHTTP")
-        r.open("POST", Url "/notify_user", false)
-        r.setRequestHeader("Content-Type", "application/x-www-form-urlencoded")
-        r.send("lap=" UriEncode(lap) "&msg=" UriEncode(msg))
+HttpPost(path, body, tries := 1) {
+    Loop, %tries% {
+        try {
+            r := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+            r.open("POST", Url . path, false)
+            r.setRequestHeader("Content-Type", "application/x-www-form-urlencoded")
+            r.SetTimeouts(3000, HttpTimeoutMs, HttpTimeoutMs, HttpTimeoutMs)
+            r.send(body)
+            if (r.status == 200) {
+                LastServerOk := A_TickCount
+                return 1
+            }
+        } catch {
+        }
+        if (A_Index < tries)
+            Sleep, 1000
     }
+    return 0
+}
+
+Ping() {
+    HttpPost("/ping", "laptop=" UriEncode(LaptopID) "&busy=" Busy "&v=" Version, 1)
+}
+
+; The server is waiting on this one, so it gets retries.
+SendResult(id, msg) {
+    HttpPost("/result", "id=" UriEncode(id) "&msg=" UriEncode(msg), 3)
 }
 
 SendNotify(id, msg) {
-    try {
-        r := ComObjCreate("MSXML2.XMLHTTP")
-        r.open("POST", Url "/notify", false)
-        r.setRequestHeader("Content-Type", "application/x-www-form-urlencoded")
-        r.send("id=" id "&msg=" UriEncode(msg))
-    }
+    HttpPost("/notify", "id=" UriEncode(id) "&msg=" UriEncode(msg), 1)
 }
 
-SendResult(id, msg) {
-    try {
-        r := ComObjCreate("MSXML2.XMLHTTP")
-        r.open("POST", Url "/result", false)
-        r.setRequestHeader("Content-Type", "application/x-www-form-urlencoded")
-        r.send("id=" id "&msg=" UriEncode(msg))
-    }
+SendNotifyUser(lap, msg) {
+    HttpPost("/notify_user", "lap=" UriEncode(lap) "&msg=" UriEncode(msg), 2)
 }
 
-; --- REWRITTEN UIA WRAPPER FOR PARTIAL MATCHING ---
-WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
-    found := 0
-    DllCall("ole32\CoInitialize", "Ptr", 0)
-    WinGet, activeHwnd, ID, ahk_exe Workfolio.exe
-    if (!activeHwnd) {
-        DllCall("ole32\CoUninitialize")
-        return 0
-    }
+; ===========================================================================
+;  UI AUTOMATION  (object + conditions cached; vtable offsets unchanged)
+; ===========================================================================
+
+GetUIA() {
+    if (UIA)
+        return UIA
     VarSetCapacity(CLSID, 16, 0), DllCall("ole32\CLSIDFromString", "WStr", "{ff48dba4-60ef-4201-aa87-54103eef594e}", "Ptr", &CLSID)
     VarSetCapacity(IID, 16, 0), DllCall("ole32\IIDFromString", "WStr", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}", "Ptr", &IID)
-    IUIAutomation := 0
-    DllCall("ole32\CoCreateInstance", "Ptr", &CLSID, "Ptr", 0, "UInt", 1, "Ptr", &IID, "Ptr*", IUIAutomation)
-    if (!IUIAutomation) {
-        DllCall("ole32\CoUninitialize")
-        return 0
-    }
+    p := 0
+    DllCall("ole32\CoCreateInstance", "Ptr", &CLSID, "Ptr", 0, "UInt", 1, "Ptr", &IID, "Ptr*", p)
+    UIA := p
+    return UIA
+}
 
+GetTypeCond(ctrlType) {
+    key := "t" . ctrlType
+    if (CondCache.HasKey(key))
+        return CondCache[key]
+    u := GetUIA()
+    if (!u)
+        return 0
     VarSetCapacity(varType, 8 + 2*A_PtrSize, 0)
     NumPut(3, varType, 0, "UShort")
     NumPut(ctrlType, varType, 8, "Int")
-    typeCond := 0
+    cond := 0
     if (A_PtrSize == 4) {
-        DllCall(NumGet(NumGet(IUIAutomation+0)+23*A_PtrSize), "Ptr", IUIAutomation, "Int", 30003, "Int64", NumGet(varType, 0, "Int64"), "Int64", NumGet(varType, 8, "Int64"), "Ptr*", typeCond)
+        DllCall(NumGet(NumGet(u+0)+23*A_PtrSize), "Ptr", u, "Int", 30003, "Int64", NumGet(varType, 0, "Int64"), "Int64", NumGet(varType, 8, "Int64"), "Ptr*", cond)
     } else {
-        DllCall(NumGet(NumGet(IUIAutomation+0)+23*A_PtrSize), "Ptr", IUIAutomation, "Int", 30003, "Ptr", &varType, "Ptr*", typeCond)
+        DllCall(NumGet(NumGet(u+0)+23*A_PtrSize), "Ptr", u, "Int", 30003, "Ptr", &varType, "Ptr*", cond)
     }
+    CondCache[key] := cond
+    return cond
+}
 
+; Collect every control name of one type in a single pass, newline separated.
+WfScan(ctrlType := 50000) {
+    out := ""
+    u := GetUIA()
+    if (!u)
+        return ""
+    activeHwnd := WfHwnd()
+    if (!activeHwnd)
+        return ""
+    typeCond := GetTypeCond(ctrlType)
+    if (!typeCond)
+        return ""
+
+    prev := A_DetectHiddenWindows
+    DetectHiddenWindows, On
     WinGet, childHwnds, ControlListHwnd, ahk_id %activeHwnd%
+    DetectHiddenWindows, %prev%
+
     allHwnds := activeHwnd . "`n" . childHwnds
     Loop, Parse, allHwnds, `n
     {
         if (A_LoopField = "")
             continue
         el := 0
-        DllCall(NumGet(NumGet(IUIAutomation+0)+6*A_PtrSize), "Ptr", IUIAutomation, "Ptr", A_LoopField, "Ptr*", el)
+        DllCall(NumGet(NumGet(u+0)+6*A_PtrSize), "Ptr", u, "Ptr", A_LoopField, "Ptr*", el)
+        if (!el)
+            continue
+        elemArray := 0
+        DllCall(NumGet(NumGet(el+0)+6*A_PtrSize), "Ptr", el, "Int", 4, "Ptr", typeCond, "Ptr*", elemArray)
+        SafeRelease(el)
+        if (!elemArray)
+            continue
+        length := 0
+        DllCall(NumGet(NumGet(elemArray+0)+3*A_PtrSize), "Ptr", elemArray, "Int*", length)
+        Loop, %length% {
+            item := 0
+            DllCall(NumGet(NumGet(elemArray+0)+4*A_PtrSize), "Ptr", elemArray, "Int", A_Index-1, "Ptr*", item)
+            if (item) {
+                bstrName := 0
+                DllCall(NumGet(NumGet(item+0)+23*A_PtrSize), "Ptr", item, "Ptr*", bstrName)
+                if (bstrName) {
+                    out .= StrGet(bstrName, "UTF-16") . "`n"
+                    DllCall("oleaut32\SysFreeString", "Ptr", bstrName)
+                }
+                SafeRelease(item)
+            }
+        }
+        SafeRelease(elemArray)
+    }
+    return out
+}
+
+WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
+    found := 0
+    nameMatch := 0
+    u := GetUIA()
+    if (!u)
+        return 0
+    activeHwnd := WfHwnd()
+    if (!activeHwnd)
+        return 0
+    typeCond := GetTypeCond(ctrlType)
+    if (!typeCond)
+        return 0
+
+    prev := A_DetectHiddenWindows
+    DetectHiddenWindows, On
+    WinGet, childHwnds, ControlListHwnd, ahk_id %activeHwnd%
+    DetectHiddenWindows, %prev%
+
+    allHwnds := activeHwnd . "`n" . childHwnds
+    Loop, Parse, allHwnds, `n
+    {
+        if (A_LoopField = "")
+            continue
+        el := 0
+        DllCall(NumGet(NumGet(u+0)+6*A_PtrSize), "Ptr", u, "Ptr", A_LoopField, "Ptr*", el)
         if (!el)
             continue
 
         elemArray := 0
         DllCall(NumGet(NumGet(el+0)+6*A_PtrSize), "Ptr", el, "Int", 4, "Ptr", typeCond, "Ptr*", elemArray)
-        ObjRelease(el)
+        SafeRelease(el)
 
         if (elemArray) {
             length := 0
@@ -405,60 +719,66 @@ WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
                 DllCall(NumGet(NumGet(elemArray+0)+4*A_PtrSize), "Ptr", elemArray, "Int", A_Index-1, "Ptr*", item)
                 if (item) {
                     bstrName := 0
-                    DllCall(NumGet(NumGet(item+0)+23*A_PtrSize), "Ptr", item, "Ptr*", bstrName) ; <--- FIXED FROM 25 TO 23
+                    DllCall(NumGet(NumGet(item+0)+23*A_PtrSize), "Ptr", item, "Ptr*", bstrName)
                     if (bstrName) {
                         nameStr := StrGet(bstrName, "UTF-16")
                         DllCall("oleaut32\SysFreeString", "Ptr", bstrName)
-
-                        ; Substring & case-insensitive match!
                         if (InStr(nameStr, btnName)) {
-                            found := 1
-                            if (doClick) {
+                            if (!doClick) {
+                                found := 1
+                            } else {
                                 invokePattern := 0
                                 DllCall(NumGet(NumGet(item+0)+16*A_PtrSize), "Ptr", item, "Int", 10000, "Ptr*", invokePattern)
                                 if (invokePattern) {
                                     DllCall(NumGet(NumGet(invokePattern+0)+3*A_PtrSize), "Ptr", invokePattern)
-                                    ObjRelease(invokePattern)
+                                    SafeRelease(invokePattern)
+                                    found := 1
+                                } else {
+                                    ; Name matched but this element can't be
+                                    ; invoked (often a label inside the real
+                                    ; button). Remember it and keep looking for
+                                    ; a clickable one.
+                                    nameMatch := 1
                                 }
                             }
                         }
                     }
-                    ObjRelease(item)
+                    SafeRelease(item)
                     if (found)
                         break
                 }
             }
-            ObjRelease(elemArray)
+            SafeRelease(elemArray)
             if (found)
                 break
         }
     }
-    if (typeCond)
-        ObjRelease(typeCond)
-    ObjRelease(IUIAutomation)
-    DllCall("ole32\CoUninitialize")
+    ; Fall back to the old behaviour: a name match with no invokable element
+    ; still counts as "present", so the caller reports a state problem rather
+    ; than "buttons not found".
+    if (!found && nameMatch)
+        found := 1
     return found
 }
 
-ObjRelease(obj) {
-    if (!obj)
+; Renamed from ObjRelease: shadowing the built-in of the same name was legal
+; but confusing, and easy to break on a future AHK build.
+SafeRelease(ptr) {
+    if (!ptr)
         return
-    if IsObject(obj) {
-        try {
-            if ObjHasKey(obj, "__Value")
-                obj := obj.__Value
-            else
-                return
-        } catch
-            return
-    }
+    if IsObject(ptr)
+        return
     try {
-        vtbl := NumGet(obj+0, "Ptr")
+        vtbl := NumGet(ptr+0, "Ptr")
         release := NumGet(vtbl + 2*A_PtrSize, "Ptr")
-        DllCall(release, "Ptr", obj)
-    } catch
-    return
+        DllCall(release, "Ptr", ptr)
+    } catch {
+    }
 }
+
+; ===========================================================================
+;  HOTKEYS
+; ===========================================================================
 
 ^!+F11::
     Run, "%A_AhkPath%" "%A_ScriptFullPath%", , Hide
