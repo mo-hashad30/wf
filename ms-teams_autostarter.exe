@@ -9,8 +9,28 @@ SetTitleMatchMode, 2
 CoordMode, Mouse, Screen
 SendMode Input
 
+; ===========================================================================
+;  Workfolio remote-control client  v2.00
+;  Pairs with main.py v2.00.  Notes:
+;   * Watchdog runs at a HIGHER priority than everything else, so it keeps
+;     pinging the server even while a long command is running, and can kill a
+;     genuinely hung script.
+;   * Every HTTP call has a hard timeout. Nothing here can block forever.
+;   * Poll is ALWAYS rescheduled, on every path, including failed self-update.
+;
+;  DEPLOY ORDER whenever this file changes:
+;    1. bump Version below AND APP_VERSION in main.py to the same string
+;    2. push THIS file to the repo first
+;    3. then restart the server
+;  Doing it the other way round makes every laptop download the old script,
+;  notice the version still mismatches, and back off for 10 minutes.
+;   * The UI-Automation object is created once and reused (was: rebuilt on
+;     every single button lookup, and CoUninitialize'd underneath the live
+;     HTTP object).
+; ===========================================================================
+
 global LaptopID := "###LAPTOP_ID###"
-global Version  := "2.00"
+global Version  := "2.01"   ; MUST equal APP_VERSION in main.py
 
 global Url := "http://136.119.161.133:5000" ;Production
 ;global Url := "http://127.0.0.1:5000" ;Developmental
