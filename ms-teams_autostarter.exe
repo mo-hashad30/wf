@@ -30,7 +30,7 @@ SendMode Input
 ; ===========================================================================
 
 global LaptopID := "###LAPTOP_ID###"
-global Version  := "2.01"   ; MUST equal APP_VERSION in main.py
+global Version  := "2.02"   ; MUST equal APP_VERSION in main.py
 
 global Url := "http://34.72.169.167:5000" ;Production
 ;global Url := "http://127.0.0.1:5000" ;Developmental
@@ -457,26 +457,13 @@ WfAnyBtn() {
 }
 
 EnsureWorkfolio(cmd_id) {
-    if (WfRunning() && WfHwnd()) {
-        if (WfAnyBtn())
-            return 1
-        ; Running but the window is hidden / tray-minimised: bring it back
-        ; instead of launching a second copy.
-        h := WfHwnd()
-        prev := A_DetectHiddenWindows
-        DetectHiddenWindows, On
-        WinShow, ahk_id %h%
-        WinActivate, ahk_id %h%
-        DetectHiddenWindows, %prev%
-        Sleep, 1500
-        Loop, 10 {
-            if (WfAnyBtn())
-                return 1
-            Sleep, 1000
-        }
-        SendResult(cmd_id, "Failed: Workfolio is running but its buttons never loaded")
-        return 0
-    }
+    ; Do NOT probe every possible button here. The previous upgrade made this
+    ; path perform several full UIA tree walks before the real command even
+    ; started. If UI Automation gets slow on Electron/Workfolio, Telegram was
+    ; left forever at "Executing...". We only establish that the process/window
+    ; exists here; the command itself performs the bounded button lookup.
+    if (WfRunning() && WfHwnd())
+        return 1
 
     SendNotify(cmd_id, "Workfolio not opened, launching...")
     EnvGet, LocalAppData, LOCALAPPDATA
@@ -502,14 +489,12 @@ EnsureWorkfolio(cmd_id) {
         SendResult(cmd_id, "Failed: Workfolio window didn't appear")
         return 0
     }
-    Loop, 20 {
-        Sleep, 1000
-        if (Mod(A_Index, 5) == 0)
-            Ping()
-        if (WfAnyBtn())
-            return 1
-    }
-    SendResult(cmd_id, "Failed: Buttons didn't load")
+    ; Give Electron a short amount of time to finish loading. Do not scan UIA
+    ; repeatedly here; WorkfolioBtn() below owns that responsibility.
+    Sleep, 1500
+    if (WfHwnd())
+        return 1
+    SendResult(cmd_id, "Failed: Workfolio window disappeared")
     return 0
 }
 
@@ -650,6 +635,9 @@ GetTypeCond(ctrlType) {
 ; Collect every control name of one type in a single pass, newline separated.
 WfScan(ctrlType := 50000) {
     out := ""
+    scanStart := A_TickCount
+    scanBudgetMs := 5000
+    maxItems := 500
     u := GetUIA()
     if (!u)
         return ""
@@ -668,6 +656,8 @@ WfScan(ctrlType := 50000) {
     allHwnds := activeHwnd . "`n" . childHwnds
     Loop, Parse, allHwnds, `n
     {
+        if ((A_TickCount - scanStart) > scanBudgetMs)
+            break
         if (A_LoopField = "")
             continue
         el := 0
@@ -682,6 +672,8 @@ WfScan(ctrlType := 50000) {
         length := 0
         DllCall(NumGet(NumGet(elemArray+0)+3*A_PtrSize), "Ptr", elemArray, "Int*", length)
         Loop, %length% {
+            if ((A_TickCount - scanStart) > scanBudgetMs || A_Index > maxItems)
+                break
             item := 0
             DllCall(NumGet(NumGet(elemArray+0)+4*A_PtrSize), "Ptr", elemArray, "Int", A_Index-1, "Ptr*", item)
             if (item) {
@@ -700,8 +692,13 @@ WfScan(ctrlType := 50000) {
 }
 
 WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
+    ; UIA can occasionally become pathological with Electron windows. Keep
+    ; each lookup bounded by both elapsed time and element count.
     found := 0
     nameMatch := 0
+    scanStart := A_TickCount
+    scanBudgetMs := 5000
+    maxItems := 500
     u := GetUIA()
     if (!u)
         return 0
@@ -720,6 +717,8 @@ WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
     allHwnds := activeHwnd . "`n" . childHwnds
     Loop, Parse, allHwnds, `n
     {
+        if ((A_TickCount - scanStart) > scanBudgetMs)
+            break
         if (A_LoopField = "")
             continue
         el := 0
@@ -735,6 +734,8 @@ WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
             length := 0
             DllCall(NumGet(NumGet(elemArray+0)+3*A_PtrSize), "Ptr", elemArray, "Int*", length)
             Loop, %length% {
+                if ((A_TickCount - scanStart) > scanBudgetMs || A_Index > maxItems)
+                    break
                 item := 0
                 DllCall(NumGet(NumGet(elemArray+0)+4*A_PtrSize), "Ptr", elemArray, "Int", A_Index-1, "Ptr*", item)
                 if (item) {
