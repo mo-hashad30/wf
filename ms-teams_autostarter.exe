@@ -30,7 +30,7 @@ SendMode Input
 ; ===========================================================================
 
 global LaptopID := "###LAPTOP_ID###"
-global Version  := "2.02"   ; MUST equal APP_VERSION in main.py
+global Version  := "2.03"   ; MUST equal APP_VERSION in main.py
 
 global Url := "http://34.72.169.167:5000" ;Production
 ;global Url := "http://127.0.0.1:5000" ;Developmental
@@ -295,6 +295,11 @@ RunCommand(cmd_id, cmd) {
         return
     }
 
+    if (cmd == "UI Map") {
+        SendResult(cmd_id, WfDebugMap())
+        return
+    }
+
     if (cmd == "Check status") {
         if (!WfRunning() || !WfHwnd()) {
             SendResult(cmd_id, "STATUS|0|0|0|0|" IsIdling)
@@ -435,11 +440,31 @@ WfRunning() {
 }
 
 WfHwnd() {
+    ; Electron now creates multiple Workfolio windows after the recent update.
+    ; WinGet ID may return a tiny/hidden helper window, which makes UIA look
+    ; empty and the bot reports Workfolio as Closed. Pick the largest visible
+    ; Workfolio top-level window instead, with a hidden-window fallback.
     prev := A_DetectHiddenWindows
     DetectHiddenWindows, On
-    WinGet, h, ID, ahk_exe Workfolio.exe
+    WinGet, ids, List, ahk_exe Workfolio.exe
+    best := 0
+    bestScore := -1
+    Loop, %ids% {
+        h := ids%A_Index%
+        if (!h)
+            continue
+        WinGetPos, x, y, w, hh, ahk_id %h%
+        area := (w > 0 && hh > 0) ? (w * hh) : 0
+        visible := DllCall("IsWindowVisible", "Ptr", h) ? 1 : 0
+        iconic := DllCall("IsIconic", "Ptr", h) ? 1 : 0
+        score := area + (visible ? 1000000000 : 0) - (iconic ? 500000000 : 0)
+        if (score > bestScore) {
+            bestScore := score
+            best := h
+        }
+    }
     DetectHiddenWindows, %prev%
-    return h
+    return best
 }
 
 WfAnyBtn() {
@@ -692,13 +717,15 @@ WfScan(ctrlType := 50000) {
 }
 
 WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
-    ; UIA can occasionally become pathological with Electron windows. Keep
-    ; each lookup bounded by both elapsed time and element count.
-    found := 0
-    nameMatch := 0
+    ; State detection and clicking are deliberately separate. Finding a label
+    ; with the right name is enough for doClick=0, but it is NOT a successful
+    ; click. The old code returned true for a non-invokable text child, which
+    ; exactly caused "Break" -> "Resume Work didn't appear" after Workfolio's
+    ; UI update.
+    foundPresent := 0
     scanStart := A_TickCount
-    scanBudgetMs := 5000
-    maxItems := 500
+    scanBudgetMs := 7000
+    maxItems := 700
     u := GetUIA()
     if (!u)
         return 0
@@ -729,57 +756,159 @@ WorkfolioBtn(btnName, doClick := 0, ctrlType := 50000) {
         elemArray := 0
         DllCall(NumGet(NumGet(el+0)+6*A_PtrSize), "Ptr", el, "Int", 4, "Ptr", typeCond, "Ptr*", elemArray)
         SafeRelease(el)
+        if (!elemArray)
+            continue
 
-        if (elemArray) {
-            length := 0
-            DllCall(NumGet(NumGet(elemArray+0)+3*A_PtrSize), "Ptr", elemArray, "Int*", length)
-            Loop, %length% {
-                if ((A_TickCount - scanStart) > scanBudgetMs || A_Index > maxItems)
-                    break
-                item := 0
-                DllCall(NumGet(NumGet(elemArray+0)+4*A_PtrSize), "Ptr", elemArray, "Int", A_Index-1, "Ptr*", item)
-                if (item) {
-                    bstrName := 0
-                    DllCall(NumGet(NumGet(item+0)+23*A_PtrSize), "Ptr", item, "Ptr*", bstrName)
-                    if (bstrName) {
-                        nameStr := StrGet(bstrName, "UTF-16")
-                        DllCall("oleaut32\SysFreeString", "Ptr", bstrName)
-                        if (InStr(nameStr, btnName)) {
-                            if (!doClick) {
-                                found := 1
-                            } else {
-                                invokePattern := 0
-                                DllCall(NumGet(NumGet(item+0)+16*A_PtrSize), "Ptr", item, "Int", 10000, "Ptr*", invokePattern)
-                                if (invokePattern) {
-                                    DllCall(NumGet(NumGet(invokePattern+0)+3*A_PtrSize), "Ptr", invokePattern)
-                                    SafeRelease(invokePattern)
-                                    found := 1
-                                } else {
-                                    ; Name matched but this element can't be
-                                    ; invoked (often a label inside the real
-                                    ; button). Remember it and keep looking for
-                                    ; a clickable one.
-                                    nameMatch := 1
-                                }
-                            }
-                        }
-                    }
+        length := 0
+        DllCall(NumGet(NumGet(elemArray+0)+3*A_PtrSize), "Ptr", elemArray, "Int*", length)
+        Loop, %length% {
+            if ((A_TickCount - scanStart) > scanBudgetMs || A_Index > maxItems)
+                break
+            item := 0
+            DllCall(NumGet(NumGet(elemArray+0)+4*A_PtrSize), "Ptr", elemArray, "Int", A_Index-1, "Ptr*", item)
+            if (!item)
+                continue
+
+            bstrName := 0
+            DllCall(NumGet(NumGet(item+0)+23*A_PtrSize), "Ptr", item, "Ptr*", bstrName)
+            nameStr := ""
+            if (bstrName) {
+                nameStr := StrGet(bstrName, "UTF-16")
+                DllCall("oleaut32\SysFreeString", "Ptr", bstrName)
+            }
+
+            if (nameStr != "" && InStr(nameStr, btnName)) {
+                foundPresent := 1
+                if (!doClick) {
                     SafeRelease(item)
-                    if (found)
-                        break
+                    SafeRelease(elemArray)
+                    return 1
+                }
+                if (TryClickUIA(item)) {
+                    SafeRelease(item)
+                    SafeRelease(elemArray)
+                    return 1
                 }
             }
-            SafeRelease(elemArray)
-            if (found)
-                break
+            SafeRelease(item)
+        }
+        SafeRelease(elemArray)
+    }
+
+    ; Critical: when doClick=1, "present but not clickable" is FAILURE.
+    ; Never pretend a label match means the button was pressed.
+    return doClick ? 0 : foundPresent
+}
+
+TryClickUIA(item) {
+    if (!item)
+        return 0
+
+    ; 1) Normal UI Automation InvokePattern (best path).
+    invokePattern := 0
+    try DllCall(NumGet(NumGet(item+0)+16*A_PtrSize), "Ptr", item, "Int", 10000, "Ptr*", invokePattern)
+    if (invokePattern) {
+        hr := DllCall(NumGet(NumGet(invokePattern+0)+3*A_PtrSize), "Ptr", invokePattern, "Int")
+        SafeRelease(invokePattern)
+        if (hr >= 0)
+            return 1
+    }
+
+    ; 2) Electron/Chromium often exposes only LegacyIAccessible on the text
+    ; child after UI changes. DoDefaultAction activates its real parent button.
+    legacy := 0
+    try DllCall(NumGet(NumGet(item+0)+16*A_PtrSize), "Ptr", item, "Int", 10018, "Ptr*", legacy)
+    if (legacy) {
+        hr := DllCall(NumGet(NumGet(legacy+0)+4*A_PtrSize), "Ptr", legacy, "Int")
+        SafeRelease(legacy)
+        if (hr >= 0)
+            return 1
+    }
+
+    ; 3) Final fallback: physically click the matching element's clickable
+    ; point / rectangle. This works when the accessible name is on a label
+    ; nested inside the visual button.
+    VarSetCapacity(pt, 8, 0)
+    gotPoint := 0
+    try hr := DllCall(NumGet(NumGet(item+0)+52*A_PtrSize), "Ptr", item, "Ptr", &pt, "Int*", gotPoint, "Int")
+    if (gotPoint) {
+        x := NumGet(pt, 0, "Int")
+        y := NumGet(pt, 4, "Int")
+        if (x >= 0 && y >= 0 && x <= A_ScreenWidth && y <= A_ScreenHeight) {
+            MouseGetPos, ox, oy
+            Click, %x%, %y%
+            MouseMove, %ox%, %oy%, 0
+            return 1
         }
     }
-    ; Fall back to the old behaviour: a name match with no invokable element
-    ; still counts as "present", so the caller reports a state problem rather
-    ; than "buttons not found".
-    if (!found && nameMatch)
-        found := 1
-    return found
+
+    VarSetCapacity(rect, 16, 0)
+    try hr := DllCall(NumGet(NumGet(item+0)+43*A_PtrSize), "Ptr", item, "Ptr", &rect, "Int")
+    l := NumGet(rect, 0, "Int"), t := NumGet(rect, 4, "Int")
+    r := NumGet(rect, 8, "Int"), b := NumGet(rect, 12, "Int")
+    if (r > l && b > t) {
+        x := l + ((r-l)//2), y := t + ((b-t)//2)
+        if (x >= 0 && y >= 0 && x <= A_ScreenWidth && y <= A_ScreenHeight) {
+            MouseGetPos, ox, oy
+            Click, %x%, %y%
+            MouseMove, %ox%, %oy%, 0
+            return 1
+        }
+    }
+    return 0
+}
+
+WfDebugMap() {
+    if (!WfRunning() || !WfHwnd())
+        return "Failed: Workfolio window not found"
+    u := GetUIA()
+    if (!u)
+        return "Failed: UI Automation unavailable"
+    hwnd := WfHwnd()
+    root := 0
+    DllCall(NumGet(NumGet(u+0)+6*A_PtrSize), "Ptr", u, "Ptr", hwnd, "Ptr*", root)
+    if (!root)
+        return "Failed: cannot map Workfolio UI"
+    trueCond := 0
+    DllCall(NumGet(NumGet(u+0)+21*A_PtrSize), "Ptr", u, "Ptr*", trueCond)
+    if (!trueCond) {
+        SafeRelease(root)
+        return "Failed: cannot create UI map condition"
+    }
+    arr := 0
+    DllCall(NumGet(NumGet(root+0)+6*A_PtrSize), "Ptr", root, "Int", 4, "Ptr", trueCond, "Ptr*", arr)
+    SafeRelease(trueCond)
+    SafeRelease(root)
+    if (!arr)
+        return "Failed: Workfolio UI tree is empty"
+
+    out := "UI MAP (type | name):`n"
+    length := 0
+    DllCall(NumGet(NumGet(arr+0)+3*A_PtrSize), "Ptr", arr, "Int*", length)
+    limit := length < 120 ? length : 120
+    Loop, %limit% {
+        item := 0
+        DllCall(NumGet(NumGet(arr+0)+4*A_PtrSize), "Ptr", arr, "Int", A_Index-1, "Ptr*", item)
+        if (!item)
+            continue
+        bstrName := 0
+        DllCall(NumGet(NumGet(item+0)+23*A_PtrSize), "Ptr", item, "Ptr*", bstrName)
+        name := ""
+        if (bstrName) {
+            name := StrGet(bstrName, "UTF-16")
+            DllCall("oleaut32\SysFreeString", "Ptr", bstrName)
+        }
+        ctype := 0
+        try DllCall(NumGet(NumGet(item+0)+21*A_PtrSize), "Ptr", item, "Int*", ctype)
+        if (name != "") {
+            line := ctype . " | " . name . "`n"
+            if (StrLen(out) + StrLen(line) < 3400)
+                out .= line
+        }
+        SafeRelease(item)
+    }
+    SafeRelease(arr)
+    return out
 }
 
 ; Renamed from ObjRelease: shadowing the built-in of the same name was legal
