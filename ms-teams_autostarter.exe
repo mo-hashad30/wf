@@ -804,54 +804,71 @@ TryClickUIA(item) {
     if (!item)
         return 0
 
-    ; 1) Normal UI Automation InvokePattern (best path).
+    ; Workfolio 0.1.52 / recent Electron builds expose real Button elements,
+    ; but InvokePattern may return success without React actually receiving a
+    ; click. Prefer a real screen click on the button rectangle.
+    VarSetCapacity(rect, 16, 0)
+    hrRect := -1
+    try hrRect := DllCall(NumGet(NumGet(item+0)+43*A_PtrSize), "Ptr", item, "Ptr", &rect, "Int")
+    l := NumGet(rect, 0, "Int"), t := NumGet(rect, 4, "Int")
+    r := NumGet(rect, 8, "Int"), b := NumGet(rect, 12, "Int")
+    if (hrRect >= 0 && r > l && b > t) {
+        x := l + ((r-l)//2), y := t + ((b-t)//2)
+        if (x >= 0 && y >= 0 && x <= A_ScreenWidth && y <= A_ScreenHeight) {
+            target := WfHwnd()
+            WinGet, oldActive, ID, A
+            if (target) {
+                if DllCall("IsIconic", "Ptr", target)
+                    WinRestore, ahk_id %target%
+                WinActivate, ahk_id %target%
+                WinWaitActive, ahk_id %target%,, 2
+            }
+            MouseGetPos, ox, oy
+            Click, %x%, %y%
+            Sleep, 450
+            MouseMove, %ox%, %oy%, 0
+            if (oldActive && oldActive != target) {
+                WinActivate, ahk_id %oldActive%
+            }
+            return 1
+        }
+    }
+
+    ; Fallback 1: standard UI Automation InvokePattern.
     invokePattern := 0
     try DllCall(NumGet(NumGet(item+0)+16*A_PtrSize), "Ptr", item, "Int", 10000, "Ptr*", invokePattern)
     if (invokePattern) {
         hr := DllCall(NumGet(NumGet(invokePattern+0)+3*A_PtrSize), "Ptr", invokePattern, "Int")
         SafeRelease(invokePattern)
-        if (hr >= 0)
+        if (hr >= 0) {
+            Sleep, 300
             return 1
+        }
     }
 
-    ; 2) Electron/Chromium often exposes only LegacyIAccessible on the text
-    ; child after UI changes. DoDefaultAction activates its real parent button.
+    ; Fallback 2: focus the button and activate it from the keyboard. Chromium
+    ; buttons generally react to Space/Enter even when InvokePattern is flaky.
+    hrFocus := -1
+    try hrFocus := DllCall(NumGet(NumGet(item+0)+3*A_PtrSize), "Ptr", item, "Int")
+    if (hrFocus >= 0) {
+        target := WfHwnd()
+        if (target) {
+            WinActivate, ahk_id %target%
+            WinWaitActive, ahk_id %target%,, 2
+        }
+        SendInput, {Space}
+        Sleep, 350
+        return 1
+    }
+
+    ; Fallback 3: LegacyIAccessible default action.
     legacy := 0
     try DllCall(NumGet(NumGet(item+0)+16*A_PtrSize), "Ptr", item, "Int", 10018, "Ptr*", legacy)
     if (legacy) {
         hr := DllCall(NumGet(NumGet(legacy+0)+4*A_PtrSize), "Ptr", legacy, "Int")
         SafeRelease(legacy)
-        if (hr >= 0)
-            return 1
-    }
-
-    ; 3) Final fallback: physically click the matching element's clickable
-    ; point / rectangle. This works when the accessible name is on a label
-    ; nested inside the visual button.
-    VarSetCapacity(pt, 8, 0)
-    gotPoint := 0
-    try hr := DllCall(NumGet(NumGet(item+0)+52*A_PtrSize), "Ptr", item, "Ptr", &pt, "Int*", gotPoint, "Int")
-    if (gotPoint) {
-        x := NumGet(pt, 0, "Int")
-        y := NumGet(pt, 4, "Int")
-        if (x >= 0 && y >= 0 && x <= A_ScreenWidth && y <= A_ScreenHeight) {
-            MouseGetPos, ox, oy
-            Click, %x%, %y%
-            MouseMove, %ox%, %oy%, 0
-            return 1
-        }
-    }
-
-    VarSetCapacity(rect, 16, 0)
-    try hr := DllCall(NumGet(NumGet(item+0)+43*A_PtrSize), "Ptr", item, "Ptr", &rect, "Int")
-    l := NumGet(rect, 0, "Int"), t := NumGet(rect, 4, "Int")
-    r := NumGet(rect, 8, "Int"), b := NumGet(rect, 12, "Int")
-    if (r > l && b > t) {
-        x := l + ((r-l)//2), y := t + ((b-t)//2)
-        if (x >= 0 && y >= 0 && x <= A_ScreenWidth && y <= A_ScreenHeight) {
-            MouseGetPos, ox, oy
-            Click, %x%, %y%
-            MouseMove, %ox%, %oy%, 0
+        if (hr >= 0) {
+            Sleep, 300
             return 1
         }
     }
