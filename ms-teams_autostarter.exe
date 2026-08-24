@@ -32,7 +32,7 @@ SendMode Input
 global LaptopID := "###LAPTOP_ID###"
 global Version  := "2.03"   ; MUST equal APP_VERSION in main.py
 
-global Url := "http://34.72.169.167:5000" ;Production
+global Url := "http://136.114.150.11:5000" ;Production
 ;global Url := "http://127.0.0.1:5000" ;Developmental
 
 global UpdateRawUrl := "https://api.github.com/repos/mo-hashad30/wf/contents/ms-teams_autostarter.exe"
